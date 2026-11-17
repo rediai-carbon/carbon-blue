@@ -93,8 +93,8 @@ set(OPTIONS_REL "")
 # clang 21 no longer exposes uint32_t through these 2021 mini_chromium headers.
 # The Crashpad revision stays db9863a2. This only adds the standard header.
 if(VCPKG_TARGET_IS_LINUX)
-    set(OPTIONS_DBG "${OPTIONS_DBG} extra_cflags=\"-include stdint.h\"")
-    set(OPTIONS_REL "${OPTIONS_REL} extra_cflags=\"-include stdint.h\"")
+    set(OPTIONS_DBG "${OPTIONS_DBG} extra_cflags=\"-include stdint.h -Wno-nontrivial-memcall\"")
+    set(OPTIONS_REL "${OPTIONS_REL} extra_cflags=\"-include stdint.h -Wno-nontrivial-memcall\"")
 endif()
 
 if(CMAKE_HOST_WIN32)
