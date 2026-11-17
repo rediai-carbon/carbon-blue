@@ -46,6 +46,16 @@ checkout_in_path(
         2to3_find_mac_sdk_py.patch
 )
 
+# Linux util includes this header. The revision is the one in Crashpad's DEPS
+# at db9863a2. The port previously checked out only mini_chromium.
+if(VCPKG_TARGET_IS_LINUX)
+    checkout_in_path(
+        "${SOURCE_PATH}/third_party/lss/lss"
+        "https://chromium.googlesource.com/linux-syscall-support.git"
+        "7bde79cc274d06451bf65ae82c012a5d3e476b5a"
+    )
+endif()
+
 function(replace_gn_dependency INPUT_FILE OUTPUT_FILE LIBRARY_NAMES)
     unset(_LIBRARY_DEB CACHE)
     find_library(_LIBRARY_DEB NAMES ${LIBRARY_NAMES}

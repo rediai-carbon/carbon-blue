@@ -8,6 +8,7 @@
   ],
   "dependencies": [
     "vcpkg-gn",
-    "zlib"
+    "zlib",
+    "curl"
   ]
 }
