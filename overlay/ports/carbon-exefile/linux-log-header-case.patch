@@ -1,0 +1,24 @@
+diff --git a/StdAfx.h b/StdAfx.h
+--- a/StdAfx.h
++++ b/StdAfx.h
+@@ -37,7 +37,7 @@
+ #include <CcpCore.h>
+ 
+ // carbon-log
+-#include <CCPLog.h>
++#include <CcpLog.h>
+ 
+ // Python
+ #include <Python.h>
+diff --git a/ExeFile.cpp b/ExeFile.cpp
+--- a/ExeFile.cpp
++++ b/ExeFile.cpp
+@@ -3,7 +3,7 @@
+ #include "ExeFile.h"
+ #include "Crashpad.h"
+ #include "BlueInterface.h"
+-#include <CCPLog.h>
++#include <CcpLog.h>
+ 
+ #include <errno.h>
+ #include <string>

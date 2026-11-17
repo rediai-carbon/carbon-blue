@@ -17,6 +17,8 @@ vcpkg_from_git(
   URL https://github.com/carbonengine/exefile.git
   REF abeacdaccde0b80a74e61903843756be9e628c6d
   HEAD_REF main
+  PATCHES
+    linux-log-header-case.patch
 )
 
 vcpkg_cmake_configure(
