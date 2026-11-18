@@ -1,5 +1,9 @@
 // Copyright © 2014 CCP ehf.
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "StdAfx.h"
 #include "IBlueObjectProxy.h"
 #include "YamlReader.h"
@@ -16,6 +20,8 @@
 #if __APPLE__
 #include <locale>
 #include <codecvt>
+#elif defined(__linux__)
+#include <locale.h>
 #elif _WIN32
 #include <clocale>
 #else
@@ -57,7 +63,7 @@ YamlReader::YamlReader() :
 #ifdef _WIN32
 	,
 	m_locale( _create_locale( LC_ALL, "en_US" ) )
-#elif __APPLE__
+#elif defined(__APPLE__) || defined(__linux__)
 	,
 	m_locale( newlocale(LC_ALL_MASK, "C", 0 ) )
 #endif
@@ -88,7 +94,7 @@ YamlReader::~YamlReader()
 	}
 #ifdef _WIN32
 	_free_locale( m_locale );
-#elif __APPLE__
+#elif defined(__APPLE__) || defined(__linux__)
 	freelocale( m_locale );
 #endif
 }
@@ -492,8 +498,12 @@ void YamlReader::ReadValueImpl( T& dst )
 	{
 #ifdef _WIN32
 		dst = _atoi_l( (const char*)m_event->data.scalar.value, m_locale );
-#else
+#elif defined(__APPLE__)
 		dst = atoi_l( (const char*)m_event->data.scalar.value, m_locale );
+#elif defined(__linux__)
+		dst = static_cast<T>( strtol_l( (const char*)m_event->data.scalar.value, nullptr, 10, m_locale ) );
+#else
+#error "Unsupported platform"
 #endif
 	}
 }
@@ -628,8 +638,12 @@ void YamlReader::ReadValue( double& dst )
 	{
 #ifdef _WIN32
 		dst = _atof_l( (const char*)m_event->data.scalar.value, m_locale );
-#else
+#elif defined(__APPLE__)
 		dst = atof_l( (const char*)m_event->data.scalar.value, m_locale);
+#elif defined(__linux__)
+		dst = strtod_l( (const char*)m_event->data.scalar.value, nullptr, m_locale );
+#else
+#error "Unsupported platform"
 #endif
 	}
 }
@@ -684,8 +698,12 @@ void YamlReader::ReadFloatArray( float* values, size_t count )
 			{
 #ifdef _WIN32
 				values[i] = (float)_atof_l( (const char*)m_event->data.scalar.value, m_locale );
-#else
+#elif defined(__APPLE__)
 				values[i] = (float)atof_l( (const char*)m_event->data.scalar.value, m_locale );
+#elif defined(__linux__)
+				values[i] = (float)strtod_l( (const char*)m_event->data.scalar.value, nullptr, m_locale );
+#else
+#error "Unsupported platform"
 #endif
 				GetNextEvent();
 			}

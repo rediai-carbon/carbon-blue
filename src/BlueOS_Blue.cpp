@@ -7,6 +7,15 @@
 #if __APPLE__
 #include <sys/sysctl.h>
 #endif
+#if defined(__linux__)
+#include <dirent.h>
+#include <unistd.h>
+#include <limits.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <strings.h>
+#endif
 
 #if BLUE_WITH_PYTHON
 
@@ -161,6 +170,68 @@ static PyObject *PyGetExeFilePids( PyObject* self, PyObject* args)
     }
 
     return list;
+}
+#elif defined(__linux__)
+
+static bool ExeFileImageName( const char* path )
+{
+	const char* base = path;
+	for( const char* p = path; *p; ++p )
+	{
+		if( *p == '/' )
+		{
+			base = p + 1;
+		}
+	}
+	return strcasecmp( base, "exefile" ) == 0 || strcasecmp( base, "exefile.exe" ) == 0;
+}
+
+static PyObject *PyGetExeFilePids( PyObject* self, PyObject* args)
+{
+	if( !PyArg_ParseTuple( args, "" ) )
+	{
+		return nullptr;
+	}
+
+	DIR* dir = opendir( "/proc" );
+	if( !dir )
+	{
+		return PyErr_SetFromErrno( PyExc_OSError );
+	}
+
+	PyObject* list = PyList_New( 0 );
+	if( !list )
+	{
+		closedir( dir );
+		return nullptr;
+	}
+
+	while( dirent* entry = readdir( dir ) )
+	{
+		char* end = nullptr;
+		long pid = strtol( entry->d_name, &end, 10 );
+		if( end == entry->d_name || *end != '\0' || pid <= 0 )
+		{
+			continue;
+		}
+
+		char linkPath[64];
+		std::snprintf( linkPath, sizeof( linkPath ), "/proc/%ld/exe", pid );
+		char image[PATH_MAX];
+		ssize_t length = readlink( linkPath, image, sizeof( image ) - 1 );
+		if( length < 0 )
+		{
+			continue;
+		}
+		image[length] = '\0';
+		if( ExeFileImageName( image ) )
+		{
+			PyList_Append( list, BluePy( PyLong_FromLong( pid ) ) );
+		}
+	}
+
+	closedir( dir );
+	return list;
 }
 #endif
 #endif

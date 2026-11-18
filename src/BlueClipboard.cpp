@@ -89,4 +89,25 @@ BlueClipboard::OperationResult BlueClipboard::SetData( const std::wstring& data 
 {
 	return ::SetData( CF_UNICODETEXT, data );
 }
+#elif defined(__linux__)
+
+BlueClipboard::OperationResult BlueClipboard::GetData( std::string& ) const
+{
+	return CLIPBOARD_FAILURE;
+}
+
+BlueClipboard::OperationResult BlueClipboard::GetData( std::wstring& ) const
+{
+	return CLIPBOARD_FAILURE;
+}
+
+BlueClipboard::OperationResult BlueClipboard::SetData( const std::string& )
+{
+	return CLIPBOARD_FAILURE;
+}
+
+BlueClipboard::OperationResult BlueClipboard::SetData( const std::wstring& )
+{
+	return CLIPBOARD_FAILURE;
+}
 #endif

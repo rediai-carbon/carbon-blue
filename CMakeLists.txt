@@ -13,7 +13,7 @@ find_package(carbon-core REQUIRED CONFIG)
 find_package(carbon-blueexposure REQUIRED CONFIG)
 find_package(carbon-io REQUIRED CONFIG)
 find_package(CURL REQUIRED CONFIG)
-find_package(YAML REQUIRED CONFIG)
+find_package(yaml REQUIRED CONFIG)
 find_package(zlib CONFIG REQUIRED)
 find_package(carbon-scheduler REQUIRED CONFIG)
 find_package(OpenSSL COMPONENTS Crypto SSL REQUIRED)
@@ -57,9 +57,18 @@ set(PUBLIC_HEADER_FILES_INCLUDE
 )
 
 
+set(BLUE_APPLE_SOURCES
+    src/BlueSysInfo.mm
+    src/BlueClipboard.mm
+    src/BlueOS.mm
+)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(BLUE_APPLE_SOURCES)
+endif()
+
 ccp_add_library(Blue SHARED
     src/Logger/Logger.cpp
-    src/BlueSysInfo.mm
+    ${BLUE_APPLE_SOURCES}
     src/Accumulator/PercentileAccumulator.cpp
     src/Accumulator/PercentileAccumulator_Blue.cpp
     src/AllReferences.cpp
@@ -79,7 +88,6 @@ ccp_add_library(Blue SHARED
     src/BlueAsyncRes_Blue.cpp
     src/BlueClipboard.cpp
     src/BlueClipboard.h
-    src/BlueClipboard.mm
     src/BlueClipboard_Blue.cpp
     src/BlueEventToPython.cpp
     src/BlueEventToPython.h
@@ -105,7 +113,6 @@ ccp_add_library(Blue SHARED
     src/BlueNetworkStream_Blue.cpp
     src/BlueOS.cpp
     src/BlueOS.h
-    src/BlueOS.mm
     src/BlueOS_Blue.cpp
     src/BlueObjectBuilderPython.cpp
     src/BlueObjectBuilderPython.h

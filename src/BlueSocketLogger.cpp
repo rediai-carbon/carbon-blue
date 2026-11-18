@@ -10,9 +10,12 @@
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #include <mach-o/dyld.h>
+#endif
+#if defined(__APPLE__) || defined(__linux__)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 #endif
 
 namespace
@@ -190,6 +193,17 @@ private:
 				strcpy_s( m_executablePath, _TRUNCATE, path );
 				free( path );
 			}
+		}
+#elif defined(__linux__)
+		if( gethostname( m_machineName, sizeof( m_machineName ) ) != 0 )
+		{
+			m_machineName[0] = '\0';
+		}
+		m_machineName[sizeof( m_machineName ) - 1] = '\0';
+		ssize_t pathLength = readlink( "/proc/self/exe", m_executablePath, sizeof( m_executablePath ) - 1 );
+		if( pathLength >= 0 )
+		{
+			m_executablePath[pathLength] = '\0';
 		}
 #endif
 	}

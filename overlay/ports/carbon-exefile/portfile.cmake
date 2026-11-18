@@ -13,12 +13,10 @@ endif()
 
 vcpkg_from_git(
   OUT_SOURCE_PATH SOURCE_PATH
-  # Public repository. HTTPS is the same commit as the registry SSH URL.
-  URL https://github.com/carbonengine/exefile.git
-  REF abeacdaccde0b80a74e61903843756be9e628c6d
-  HEAD_REF main
-  PATCHES
-    linux-log-header-case.patch
+  # Linux host candidate. The selected parent remains abeacdacc.
+  URL https://github.com/rediai-carbon/carbon-exefile.git
+  REF 08019310754068b055343b6e3bbe8eca8f7d1eba
+  HEAD_REF fe8/linux-host
 )
 
 vcpkg_cmake_configure(

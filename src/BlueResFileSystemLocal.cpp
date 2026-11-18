@@ -6,6 +6,7 @@
 #include "IBluePaths.h"
 #include "BlueFileUtil.h"
 
+#include <mutex>
 #include <sstream>
 #include <optional>
 
@@ -422,7 +423,7 @@ std::optional<std::vector<std::wstring>> ExpandSearchPath( const std::wstring& p
 	auto found = searchPaths.find( key );
 	if( found == searchPaths.end() )
 	{
-		return { {} };
+		return std::vector<std::wstring>{};
 	}
 
 	if( currentExpansion.find( keyW ) != currentExpansion.end() )
