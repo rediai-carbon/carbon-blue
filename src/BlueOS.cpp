@@ -830,6 +830,12 @@ bool BlueOS::Startup( int pyOptimizeFlag )
 
 #if BLUE_WITH_PYTHON
 FAIL:
+	// Startup can fail while PyInit_blue is still on the stack. Keep the
+	// Python error across the cleanup so the importer reports it.
+	PyObject* errorType = nullptr;
+	PyObject* errorValue = nullptr;
+	PyObject* errorTraceback = nullptr;
+	PyErr_Fetch( &errorType, &errorValue, &errorTraceback );
 	if( PyOS )
 	{
 		PyOS->Shutdown(1);
@@ -848,6 +854,11 @@ FAIL:
 		PyOS->Shutdown(2);
 		PyOS->Unlock();
 		PyOS=0;
+	}
+	PyErr_Restore( errorType, errorValue, errorTraceback );
+	if( !PyErr_Occurred() )
+	{
+		PyErr_SetString( PyExc_RuntimeError, "Blue startup failed" );
 	}
 #endif
 	return false;

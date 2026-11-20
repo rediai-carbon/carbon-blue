@@ -626,7 +626,7 @@ bool BlueNet::SendPacketToClientList( const unsigned long long* clientList,
 
 				for( int j=0; j<list[i].num; j++ ) // append in the targets
 				{
-					packer.Pack( list[i].recipients[j] );
+					packer.Pack( static_cast<uint64_t>( list[i].recipients[j] ) );
 				}
 
 				ret = SendPacketEx( list[i].transport, data, len, headerData, packer.Finalize(), PRIORITY_HIGH ) ? ret : false;
@@ -1988,12 +1988,14 @@ void BlueNet::Route( BlueNetHeader* header,
 			unsigned long long forkTargetClientID;
 			for( int i=0; i<forkedCount; i++)
 			{
-				if ( !packer->Unpack(forkTargetClientID) )
+				uint64_t packedClientID = 0;
+				if ( !packer->Unpack(packedClientID) )
 				{
 					// error in the data (can only mean premature end)
 					CCP_LOGERR_CH( s_blueNetChannel, "failed to unpack fork[%d/%d] type[0x%08X] target[%lld]", i, forkedCount, header->blueNetKey, header->destinationID );
 					return;
 				}
+				forkTargetClientID = packedClientID;
 
 				target = m_transportsByClientID.getItem( forkTargetClientID );
 				if ( target )

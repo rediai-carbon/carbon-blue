@@ -6,6 +6,9 @@
 #include "errormessage.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 #if _WIN32
 #include "WinNls.h"
@@ -265,6 +268,33 @@ std::string GetOSLanguageCode()
 	CFRelease( langs );
 
 	return *result;
+#elif defined(__linux__)
+	const char* localeName = std::getenv( "LC_ALL" );
+	if( !localeName || localeName[0] == '\0' || std::strcmp( localeName, "C" ) == 0 )
+	{
+		localeName = std::getenv( "LC_MESSAGES" );
+	}
+	if( !localeName || localeName[0] == '\0' || std::strcmp( localeName, "C" ) == 0 )
+	{
+		localeName = std::getenv( "LANG" );
+	}
+	if( !localeName || localeName[0] == '\0' || std::strcmp( localeName, "C" ) == 0 || std::strcmp( localeName, "POSIX" ) == 0 )
+	{
+		return en;
+	}
+	for( const auto& tag : allSupportedLanguageTags )
+	{
+		const size_t n = tag.size();
+		if( std::strncmp( localeName, tag.c_str(), n ) == 0 )
+		{
+			const char next = localeName[n];
+			if( next == '\0' || next == '_' || next == '.' || next == '@' )
+			{
+				return tag;
+			}
+		}
+	}
+	return en;
 #else
 #error Unsupported platform!
 #endif
@@ -329,6 +359,8 @@ void BlueShowInvalidOSVersionError()
 	std::string localizedMessage = TranslateErrorMessage( "Windows 10 or higher required", IDS_INVALIDWINDOWS );
 #elif __APPLE__
 	std::string localizedMessage = TranslateErrorMessage( "Invalid macOS version", IDS_INVALIDMACOS );
+#elif defined(__linux__)
+	std::string localizedMessage = TranslateErrorMessage( "Unsupported Linux version", IDS_INVALIDOS );
 #else
 	#error Unsupported platform!
 #endif
@@ -365,6 +397,8 @@ void DisplayErrorMessageBox( const char* title, const char* message )
 	{
 		CFRelease( messageRef );
 	}
+#elif defined(__linux__)
+	std::fprintf( stderr, "%s: %s\n", title ? title : "", message ? message : "" );
 #else
 #error Unsupported platform!
 #endif

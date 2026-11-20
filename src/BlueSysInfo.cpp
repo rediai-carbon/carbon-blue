@@ -10,6 +10,16 @@
 #include <ShlObj.h>
 #include <intrin.h>
 #endif
+#if defined(__linux__)
+#include <cpuid.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/utsname.h>
+#endif
 #include <sstream>
 
 static CcpLogChannel_t s_ch = CCP_LOG_DEFINE_CHANNEL( "BlueSysInfo" );
@@ -363,6 +373,374 @@ BlueSysInfoMemory::BlueSysInfoMemory()
 	GlobalMemoryStatusEx( &status );
 	m_totalPhysical = uint64_t( status.ullTotalPhys );
 	m_availablePhysical = uint64_t( status.ullAvailPhys );
+}
+
+#elif defined(__linux__)
+
+namespace
+{
+bool LinuxIsDirectory( const std::string& path )
+{
+	struct stat info;
+	return !path.empty() && stat( path.c_str(), &info ) == 0 && S_ISDIR( info.st_mode );
+}
+
+std::wstring LinuxExistingDirectory( const std::string& preferred, const std::string& homeFallback )
+{
+	if( LinuxIsDirectory( preferred ) )
+	{
+		return std::wstring( preferred.begin(), preferred.end() );
+	}
+	if( LinuxIsDirectory( homeFallback ) )
+	{
+		return std::wstring( homeFallback.begin(), homeFallback.end() );
+	}
+	const char* home = std::getenv( "HOME" );
+	if( home && LinuxIsDirectory( home ) )
+	{
+		return std::wstring( home, home + std::strlen( home ) );
+	}
+	return L"/tmp";
+}
+
+std::string LinuxHomePath( const char* suffix )
+{
+	const char* home = std::getenv( "HOME" );
+	if( !home || !home[0] )
+	{
+		return "";
+	}
+	std::string path( home );
+	if( suffix && suffix[0] )
+	{
+		if( path.back() != '/' )
+		{
+			path.push_back( '/' );
+		}
+		path += suffix;
+	}
+	return path;
+}
+
+std::string LinuxReadLine( const char* path )
+{
+	std::ifstream input( path );
+	std::string line;
+	if( !std::getline( input, line ) )
+	{
+		return "";
+	}
+	while( !line.empty() && ( line.back() == '\r' || line.back() == ' ' ) )
+	{
+		line.pop_back();
+	}
+	return line;
+}
+}
+
+std::wstring BlueSysInfo::GetUserDocumentsDirectory() const
+{
+	const char* documents = std::getenv( "XDG_DOCUMENTS_DIR" );
+	const std::string preferred = documents && documents[0] ? documents : LinuxHomePath( "Documents" );
+	return LinuxExistingDirectory( preferred, LinuxHomePath( "Documents" ) );
+}
+
+std::wstring BlueSysInfo::GetSharedApplicationDataDirectory() const
+{
+	return L"/usr/local/share";
+}
+
+std::wstring BlueSysInfo::GetUserApplicationDataDirectory() const
+{
+	const char* dataHome = std::getenv( "XDG_DATA_HOME" );
+	const std::string preferred = dataHome && dataHome[0] ? dataHome : LinuxHomePath( ".local/share" );
+	return LinuxExistingDirectory( preferred, LinuxHomePath( ".local/share" ) );
+}
+
+std::wstring BlueSysInfo::GetSharedFontsDirectory() const
+{
+	return L"/usr/local/share/fonts";
+}
+
+std::wstring BlueSysInfo::GetSystemFontsDirectory() const
+{
+	return L"/usr/share/fonts";
+}
+
+uint32_t BlueSysInfo::GetProcessBitCount() const
+{
+#if defined(__LP64__)
+	return 64;
+#else
+	return 32;
+#endif
+}
+
+uint32_t BlueSysInfo::GetSystemBitCount() const
+{
+	utsname name = {};
+	if( uname( &name ) == 0 )
+	{
+		if( std::strcmp( name.machine, "x86_64" ) == 0 || std::strcmp( name.machine, "aarch64" ) == 0 )
+		{
+			return 64;
+		}
+		return 32;
+	}
+	return GetProcessBitCount();
+}
+
+uint64_t BlueSysInfo::GetProcessStartTime() const
+{
+	std::ifstream selfStat( "/proc/self/stat" );
+	std::string text;
+	if( !std::getline( selfStat, text ) )
+	{
+		return 0;
+	}
+	const auto commandEnd = text.rfind( ')' );
+	if( commandEnd == std::string::npos )
+	{
+		return 0;
+	}
+	std::istringstream fields( text.substr( commandEnd + 1 ) );
+	std::string token;
+	unsigned long long startTicks = 0;
+	for( int field = 0; field < 20; ++field )
+	{
+		if( !( fields >> token ) )
+		{
+			return 0;
+		}
+		if( field == 19 )
+		{
+			startTicks = std::strtoull( token.c_str(), nullptr, 10 );
+		}
+	}
+
+	std::ifstream procStat( "/proc/stat" );
+	std::string key;
+	unsigned long long bootSeconds = 0;
+	while( procStat >> key )
+	{
+		if( key == "btime" )
+		{
+			procStat >> bootSeconds;
+			break;
+		}
+		std::string rest;
+		std::getline( procStat, rest );
+	}
+	const long ticksPerSecond = sysconf( _SC_CLK_TCK );
+	if( ticksPerSecond <= 0 || bootSeconds == 0 )
+	{
+		return 0;
+	}
+	const unsigned long long unixSeconds = bootSeconds + ( startTicks / static_cast<unsigned long long>( ticksPerSecond ) );
+	const unsigned long long fileTimeEpoch = 116444736000000000ULL;
+	return unixSeconds * 10000000ULL + fileTimeEpoch;
+}
+
+std::string BlueSysInfo::GetMachineUuid() const
+{
+	const char* paths[] = {
+		"/etc/machine-id",
+		"/var/lib/dbus/machine-id",
+		"/sys/class/dmi/id/product_uuid",
+		"/proc/sys/kernel/random/boot_id"
+	};
+	for( const char* path : paths )
+	{
+		std::string id = LinuxReadLine( path );
+		if( !id.empty() )
+		{
+			return id;
+		}
+	}
+	return "";
+}
+
+std::wstring BlueSysInfo::GetMachineName() const
+{
+	char buffer[256] = {};
+	if( gethostname( buffer, sizeof( buffer ) - 1 ) != 0 )
+	{
+		return L"";
+	}
+	if( char* dot = std::strchr( buffer, '.' ) )
+	{
+		*dot = '\0';
+	}
+	return std::wstring( buffer, buffer + std::strlen( buffer ) );
+}
+
+std::wstring BlueSysInfo::GetDomainName() const
+{
+	char buffer[256] = {};
+	if( gethostname( buffer, sizeof( buffer ) - 1 ) != 0 )
+	{
+		return L"";
+	}
+	char* start = buffer;
+	if( char* dot = std::strchr( buffer, '.' ) )
+	{
+		start = dot + 1;
+		if( char* next = std::strchr( start, '.' ) )
+		{
+			*next = '\0';
+		}
+	}
+	return std::wstring( start, start + std::strlen( start ) );
+}
+
+BlueSysInfoCpu::BlueSysInfoCpu() :
+	m_extensions( PDM::GetCPUInfo().extensions )
+{
+	auto pdmCpu = PDM::GetCPUInfo();
+	m_mHz = pdmCpu.frequency;
+	long processors = sysconf( _SC_NPROCESSORS_ONLN );
+	m_logicalCpuCount = processors > 0 ? uint32_t( processors ) : 1;
+	m_bitCount = 64;
+	m_architecture = "AMD64";
+
+	unsigned int eax = 0;
+	unsigned int ebx = 0;
+	unsigned int ecx = 0;
+	unsigned int edx = 0;
+	__cpuid( 0, eax, ebx, ecx, edx );
+	char vendor[13] = {};
+	std::memcpy( vendor, &ebx, 4 );
+	std::memcpy( vendor + 4, &edx, 4 );
+	std::memcpy( vendor + 8, &ecx, 4 );
+	const unsigned int maxBasic = eax;
+
+	unsigned int family = 0;
+	unsigned int model = 0;
+	unsigned int stepping = 0;
+	if( maxBasic >= 1 )
+	{
+		__cpuid( 1, eax, ebx, ecx, edx );
+		stepping = eax & 0xf;
+		model = ( ( eax >> 4 ) & 0xf ) | ( ( eax >> 12 ) & 0xf0 );
+		family = ( eax >> 8 ) & 0xf;
+		if( family == 0xf )
+		{
+			family += ( eax >> 20 ) & 0xff;
+		}
+	}
+	m_family = family;
+	m_revision = ( model << 8 ) | stepping;
+
+	char brand[49] = {};
+	__cpuid( 0x80000000, eax, ebx, ecx, edx );
+	if( eax >= 0x80000004 )
+	{
+		for( unsigned int leaf = 0; leaf < 3; ++leaf )
+		{
+			__cpuid( 0x80000002 + leaf, eax, ebx, ecx, edx );
+			std::memcpy( brand + leaf * 16, &eax, 4 );
+			std::memcpy( brand + leaf * 16 + 4, &ebx, 4 );
+			std::memcpy( brand + leaf * 16 + 8, &ecx, 4 );
+			std::memcpy( brand + leaf * 16 + 12, &edx, 4 );
+		}
+	}
+	m_brand = brand;
+
+	const char* platform = std::strstr( vendor, "Intel" ) ? "Intel64" : "AMD64";
+	char identifier[160];
+	std::snprintf( identifier, sizeof( identifier ), "%s Family %u Model %u Stepping %u, %s", platform, family, model, stepping, vendor );
+	m_identifier = identifier;
+}
+
+BlueSysInfoOs::BlueSysInfoOs()
+{
+	m_platform = LINUX;
+	m_majorVersion = 0;
+	m_minorVersion = 0;
+	m_buildNumber = 0;
+	m_suite = DESKTOP;
+
+	std::ifstream release( "/etc/os-release" );
+	std::string line;
+	while( std::getline( release, line ) )
+	{
+		if( line.compare( 0, 11, "VERSION_ID=" ) == 0 )
+		{
+			std::string value = line.substr( 11 );
+			if( !value.empty() && value.front() == '"' && value.back() == '"' )
+			{
+				value = value.substr( 1, value.size() - 2 );
+			}
+			int major = 0;
+			int minor = 0;
+			std::sscanf( value.c_str(), "%d.%d", &major, &minor );
+			m_majorVersion = major;
+			m_minorVersion = minor;
+		}
+		else if( line.compare( 0, 16, "VERSION_CODENAME=" ) == 0 )
+		{
+			m_patch = line.substr( 16 );
+		}
+	}
+}
+
+BlueSysInfoMemory::BlueSysInfoMemory()
+{
+	m_workingSet = 0;
+	m_pageFile = 0;
+	m_totalPhysical = 0;
+	m_availablePhysical = 0;
+
+	CcpProcessMemoryInfo info;
+	if( CcpGetProcessMemoryInfo( info ) )
+	{
+		m_workingSet = uint64_t( info.workingSetSize );
+		m_pageFile = uint64_t( info.pageFileUsage );
+	}
+
+	std::ifstream status( "/proc/self/status" );
+	std::string statusLine;
+	while( std::getline( status, statusLine ) )
+	{
+		const auto field = statusLine.find( "VmRSS:" );
+		if( field != std::string::npos )
+		{
+			m_workingSet = std::strtoull( statusLine.c_str() + field + 6, nullptr, 10 ) * 1024ULL;
+			break;
+		}
+	}
+	if( m_workingSet == 0 )
+	{
+		std::ifstream statm( "/proc/self/statm" );
+		unsigned long long virtualPages = 0;
+		unsigned long long residentPages = 0;
+		if( statm >> virtualPages >> residentPages )
+		{
+			const long pageSize = sysconf( _SC_PAGESIZE );
+			if( pageSize > 0 )
+			{
+				m_workingSet = residentPages * static_cast<unsigned long long>( pageSize );
+			}
+		}
+	}
+	if( m_pageFile > m_workingSet )
+	{
+		m_pageFile = 0;
+	}
+
+	std::ifstream meminfo( "/proc/meminfo" );
+	std::string memoryLine;
+	while( std::getline( meminfo, memoryLine ) )
+	{
+		if( memoryLine.compare( 0, 9, "MemTotal:" ) == 0 )
+		{
+			m_totalPhysical = std::strtoull( memoryLine.c_str() + 9, nullptr, 10 ) * 1024ULL;
+		}
+		else if( memoryLine.compare( 0, 13, "MemAvailable:" ) == 0 )
+		{
+			m_availablePhysical = std::strtoull( memoryLine.c_str() + 13, nullptr, 10 ) * 1024ULL;
+		}
+	}
 }
 
 #endif

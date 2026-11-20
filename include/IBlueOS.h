@@ -150,8 +150,12 @@ BLUE_INTERFACE(IBlueOS) : public IRoot
 
 #if _WIN32
     typedef DWORD OsErrorType;
-#else
+#elif defined(__APPLE__)
     typedef errno_t OsErrorType;
+#elif defined(__linux__)
+    typedef int OsErrorType;
+#else
+#error Unsupported platform
 #endif
     
 	struct Error

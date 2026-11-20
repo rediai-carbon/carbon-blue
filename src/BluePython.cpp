@@ -596,7 +596,10 @@ bool BluePyOS::Startup()
 	if ( !mSocketAPI )
 	{
 		CCP_LOGERR( "Failed acquiring carbon-io socket module" );
-		PyFlushError( nullptr );
+		if ( !PyErr_Occurred() )
+		{
+			PyErr_SetString( PyExc_RuntimeError, "Failed acquiring carbon-io socket module" );
+		}
 		return false;
 	}
 
@@ -604,8 +607,13 @@ bool BluePyOS::Startup()
 	if (!InitBasicModuleSupport())
 	{
 		CCP_LOGERR( "InitBasicModuleSupport() failed" );
-		PyFlushError(0);
-		Py_Finalize();
+		// PyInit_blue is still on the stack. Finalizing the interpreter here
+		// destroys it mid-import and crashes in dict_dealloc. Leave the
+		// pending import error for the caller.
+		if (!PyErr_Occurred())
+		{
+			PyErr_SetString(PyExc_RuntimeError, "InitBasicModuleSupport() failed");
+		}
 		return false;
 	}
 

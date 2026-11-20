@@ -48,4 +48,9 @@
 
 #include <BlueExposure.h>
 
+#if defined(__linux__) && defined(BLUEBUILD) && !defined(BLUEBUILD_STATIC)
+#undef BLUEIMPORT
+#define BLUEIMPORT __attribute__((visibility("default")))
+#endif
+
 #endif

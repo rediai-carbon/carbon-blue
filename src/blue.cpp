@@ -29,6 +29,12 @@ std::wstring s_logDeviceName( L"EVE" );
 static HINSTANCE s_instance = NULL;
 #elif defined(__APPLE__)
 #include <fcntl.h>
+#elif defined(__linux__)
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <cerrno>
 #endif
 
 // The templated container classes need special treatment here. Generally
@@ -210,6 +216,55 @@ HERR:
 	}
 	return r.Detach();
 
+#elif defined(__linux__)
+	wchar_t* tmp = PyUnicode_AsWideCharString( ufn.o, nullptr );
+	if( !tmp )
+	{
+		return nullptr;
+	}
+	CW2A filenameStr( tmp );
+	PyMem_Free( tmp );
+	int f = -1;
+	long fileSize = 0;
+	{
+		Ccp::PyAllowThreads _allow;
+		f = open( filenameStr, O_RDONLY );
+		if( f >= 0 && flock( f, LOCK_SH ) != 0 )
+		{
+			int err = errno;
+			close( f );
+			errno = err;
+			f = -1;
+		}
+		if( f >= 0 )
+		{
+			fileSize = lseek( f, 0, SEEK_END );
+			lseek( f, 0, SEEK_SET );
+		}
+	}
+	if( f < 0 )
+	{
+		return PyErr_SetFromErrnoWithFilename( PyExc_OSError, filenameStr );
+	}
+
+	BluePy r( PyBytes_FromStringAndSize( nullptr, Py_ssize_t( fileSize ) ) );
+	if( !r )
+	{
+		close( f );
+		return nullptr;
+	}
+	ssize_t bytes;
+	{
+		Ccp::PyAllowThreads _allow;
+		bytes = read( f, PyBytes_AsString( r ), fileSize );
+		close( f );
+	}
+	if( long( bytes ) < fileSize )
+	{
+		return PyErr_SetString( PyExc_RuntimeError, "Read short file" ), nullptr;
+	}
+	return r.Detach();
+
 #else
 #error PyAtomicFileRead implementation missing
 #endif
@@ -301,6 +356,42 @@ HERR:
 	if( written != buffer.len )
 	{
 		 return PyErr_SetString( PyExc_IOError, "Wrote short file" ), nullptr;
+	}
+	Py_RETURN_NONE;
+
+#elif defined(__linux__)
+	wchar_t* fileName = PyUnicode_AsWideCharString( ufn, nullptr );
+	if( !fileName )
+	{
+		return nullptr;
+	}
+	CW2A filenameStr( reinterpret_cast<const wchar_t*>( fileName ) );
+	PyMem_Free( fileName );
+	int f = -1;
+	{
+		Ccp::PyAllowThreads _allow;
+		f = open( filenameStr, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR );
+		if( f >= 0 && flock( f, LOCK_EX ) != 0 )
+		{
+			int err = errno;
+			close( f );
+			errno = err;
+			f = -1;
+		}
+	}
+	if( f < 0 )
+	{
+		return PyErr_SetFromErrnoWithFilename( PyExc_OSError, filenameStr );
+	}
+	ON_BLOCK_EXIT( [&] { close( f ); } );
+	ssize_t written;
+	{
+		Ccp::PyAllowThreads _allow;
+		written = write( f, buffer.buf, buffer.len );
+	}
+	if( written != buffer.len )
+	{
+		return PyErr_SetString( PyExc_IOError, "Wrote short file" ), nullptr;
 	}
 	Py_RETURN_NONE;
 

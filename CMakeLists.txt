@@ -13,7 +13,7 @@ find_package(carbon-core REQUIRED CONFIG)
 find_package(carbon-blueexposure REQUIRED CONFIG)
 find_package(carbon-io REQUIRED CONFIG)
 find_package(CURL REQUIRED CONFIG)
-find_package(YAML REQUIRED CONFIG)
+find_package(yaml REQUIRED CONFIG)
 find_package(zlib CONFIG REQUIRED)
 find_package(carbon-scheduler REQUIRED CONFIG)
 find_package(OpenSSL COMPONENTS Crypto SSL REQUIRED)
@@ -57,9 +57,18 @@ set(PUBLIC_HEADER_FILES_INCLUDE
 )
 
 
+set(BLUE_APPLE_SOURCES
+    src/BlueSysInfo.mm
+    src/BlueClipboard.mm
+    src/BlueOS.mm
+)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(BLUE_APPLE_SOURCES)
+endif()
+
 ccp_add_library(Blue SHARED
     src/Logger/Logger.cpp
-    src/BlueSysInfo.mm
+    ${BLUE_APPLE_SOURCES}
     src/Accumulator/PercentileAccumulator.cpp
     src/Accumulator/PercentileAccumulator_Blue.cpp
     src/AllReferences.cpp
@@ -79,7 +88,6 @@ ccp_add_library(Blue SHARED
     src/BlueAsyncRes_Blue.cpp
     src/BlueClipboard.cpp
     src/BlueClipboard.h
-    src/BlueClipboard.mm
     src/BlueClipboard_Blue.cpp
     src/BlueEventToPython.cpp
     src/BlueEventToPython.h
@@ -105,7 +113,6 @@ ccp_add_library(Blue SHARED
     src/BlueNetworkStream_Blue.cpp
     src/BlueOS.cpp
     src/BlueOS.h
-    src/BlueOS.mm
     src/BlueOS_Blue.cpp
     src/BlueObjectBuilderPython.cpp
     src/BlueObjectBuilderPython.h
@@ -368,6 +375,12 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
                 )
             endif ()
             set(TESTS_WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/python)
+        elseif(LINUX)
+            add_custom_command(TARGET Blue POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy ${exefile_tool} $<TARGET_FILE_DIR:Blue>
+            )
+            set(exefile_tool $<TARGET_FILE_DIR:Blue>/${EXEFILE_TOOL_NAME})
+            set(TESTS_WORKING_DIRECTORY $<TARGET_FILE_DIR:Blue>)
         else()
             set(TESTS_WORKING_DIRECTORY $<TARGET_FILE_DIR:Blue>)
         endif()
@@ -383,10 +396,25 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
                 set_tests_properties(${PYTHON_TEST} PROPERTIES ENVIRONMENT  "PYTHONPATH=$<TARGET_FILE_DIR:Blue>\;${CMAKE_CURRENT_SOURCE_DIR}/python\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/python\;${Python3_STDLIB};BUILDFLAVOR=$<LOWER_CASE:$<CONFIG>>")
             elseif (APPLE)
                  set_tests_properties(${PYTHON_TEST} PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/tests/python:$<TARGET_FILE_DIR:Blue>:${CMAKE_CURRENT_SOURCE_DIR}/python:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/python3.12/lib-dynload:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/python:${Python3_STDLIB};BUILDFLAVOR=$<LOWER_CASE:$<CONFIG>>")
+            elseif (LINUX)
+                 set_tests_properties(${PYTHON_TEST} PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/tests/python:$<TARGET_FILE_DIR:Blue>:${CMAKE_CURRENT_SOURCE_DIR}/python:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/python:${Python3_STDLIB};LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Blue>:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib;BUILDFLAVOR=$<LOWER_CASE:$<CONFIG>>")
             else()
                 message(FATAL_ERROR "Unsupported platform")
             endif ()
         endforeach()
+        if(LINUX)
+            # A missing stdlib extension used to reach Py_Finalize from inside
+            # PyInit_blue and die with SIGSEGV. The process must report the
+            # import error instead.
+            add_test(
+                NAME blue_import_failure_is_reported
+                COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/import_failure_is_reported.sh
+                WORKING_DIRECTORY $<TARGET_FILE_DIR:Blue>
+            )
+            set_tests_properties(blue_import_failure_is_reported PROPERTIES
+                ENVIRONMENT "PYTHON_PREFIX=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET};BLUE_BUILD_DIR=$<TARGET_FILE_DIR:Blue>;EXEFILE=${exefile_tool}"
+            )
+        endif()
     endif()
 
     option(INSTALL_TO_MONOLITH "Install this package to a perforce branch vendor folder - provided for backwards compatability" OFF)

@@ -1,0 +1,45 @@
+{
+  "name": "carbon-io",
+  "version": "1.5.0",
+  "description": "carbon-io is a drop-in replacement for the python312 socket module",
+  "dependencies": [
+    {
+      "name": "carbon-core",
+      "version>=": "3.3.0#1"
+    },
+    {
+      "name": "carbon-scheduler",
+      "version>=": "1.6.0"
+    },
+    {
+      "name": "ccp-debug-info",
+      "host": true,
+      "version>=": "1.0.1"
+    },
+    {
+      "name": "libuv",
+      "version>=": "1.52.0"
+    },
+    {
+      "name": "openssl",
+      "version>=": "3.6.5#2"
+    },
+    {
+      "name": "python3",
+      "version>=": "3.12.16"
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ],
+  "features": {
+    "documentation": {
+      "description": "Build Doxygen & Sphinx documentation"
+    }
+  }
+}

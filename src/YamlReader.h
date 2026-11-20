@@ -210,7 +210,13 @@ private:
 #ifdef _WIN32
 	// So user locale doesn't affect parsing results
 	_locale_t m_locale;
-#elif __APPLE__
+#elif defined(__APPLE__)
+	locale_t m_locale;
+#elif defined(__linux__)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <locale.h>
 	locale_t m_locale;
 #endif
 
