@@ -6,7 +6,9 @@ prefix="${PYTHON_PREFIX:?}"
 build="${BLUE_BUILD_DIR:?}"
 exe="${EXEFILE:?}"
 export LD_LIBRARY_PATH="${build}:${prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export PYTHONPATH="${build}:${prefix}/lib/python3.12:${prefix}/bin/python"
+# Omit the stdlib directory. Exefile adds lib-dynload beside a stdlib entry,
+# so this path is what still has to fail without a signal.
+export PYTHONPATH="${build}:${prefix}/bin/python"
 export BUILDFLAVOR="${BUILDFLAVOR:-release}"
 out="$(mktemp)"
 set +e
@@ -22,4 +24,8 @@ if [ "$code" -ge 128 ]; then
 	echo "import blue died from a signal (${code})"
 	exit 1
 fi
-grep -E '_struct|ModuleNotFoundError|InitBasicModuleSupport|PyCapsule_Import|Blue startup failed' "$out"
+if grep -E '_struct|ModuleNotFoundError|InitBasicModuleSupport|PyCapsule_Import|Blue startup failed|Could not find platform independent libraries' "$out"; then
+	exit 0
+fi
+echo "import blue failed without a Python error report (${code})"
+exit 1
