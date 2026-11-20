@@ -402,6 +402,19 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
                 message(FATAL_ERROR "Unsupported platform")
             endif ()
         endforeach()
+        if(LINUX)
+            # A missing stdlib extension used to reach Py_Finalize from inside
+            # PyInit_blue and die with SIGSEGV. The process must report the
+            # import error instead.
+            add_test(
+                NAME blue_import_failure_is_reported
+                COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/import_failure_is_reported.sh
+                WORKING_DIRECTORY $<TARGET_FILE_DIR:Blue>
+            )
+            set_tests_properties(blue_import_failure_is_reported PROPERTIES
+                ENVIRONMENT "PYTHON_PREFIX=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET};BLUE_BUILD_DIR=$<TARGET_FILE_DIR:Blue>;EXEFILE=${exefile_tool}"
+            )
+        endif()
     endif()
 
     option(INSTALL_TO_MONOLITH "Install this package to a perforce branch vendor folder - provided for backwards compatability" OFF)
