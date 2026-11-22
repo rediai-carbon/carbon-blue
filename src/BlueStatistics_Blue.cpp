@@ -1023,6 +1023,15 @@ PyObject* PyGetActiveTelemetryCategories( PyObject* self, PyObject* args )
 	return WrapTelemetryCategories( CcpTelemetryGetActiveCategories() );
 }
 
+PyObject* PyIsTelemetryCompiledIn( PyObject* /*self*/, PyObject* /*args*/ )
+{
+#if CCP_TELEMETRY_ENABLED
+	Py_RETURN_TRUE;
+#else
+	Py_RETURN_FALSE;
+#endif
+}
+
 } // anonymous namespace
 
 #endif
@@ -1170,6 +1179,15 @@ const Be::ClassInfo* BlueStatistics::ExposeToBlue()
 			"Get all currently registered Telemetry categories. Returns an empty list if Telemetry is not\n"
 			"available in this build.\n"
 			":rtype: list[BlueTelemetryCategory]"
+		)
+
+		MAP_METHOD
+		(
+			"IsTelemetryCompiledIn",
+			PyIsTelemetryCompiledIn,
+			"True when this build includes the Tracy telemetry implementation. When False, category\n"
+			"registration and activation are refused and the registered list stays empty.\n"
+			":rtype: bool"
 		)
 
 		MAP_METHOD
