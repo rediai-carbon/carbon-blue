@@ -213,6 +213,7 @@ void BlueStatistics::StartTelemetry( const std::string& server )
 
 void TelemetryEventHandler( CcpTelemetryEvent event, void* userdata )
 {
+#if CCP_TELEMETRY_ENABLED
 	if ( event == CCP_TELEMETRY_STARTED && s_isTelemetryPythonCaptureEnabled ) {
 		PyEval_SetProfile( &PythonProfiler, nullptr );
 		s_isPythonProfilerInstalled = true;
@@ -236,6 +237,10 @@ void TelemetryEventHandler( CcpTelemetryEvent event, void* userdata )
 		// The handler is registered again by whichever call starts the next capture.
 		CcpUnregisterTelemetryEventHandler( TelemetryEventHandler, nullptr );
 	}
+#else
+	(void)event;
+	(void)userdata;
+#endif
 }
 
 void BlueStatistics::StartTelemetryFromConfig( BlueStatisticsTelemetryConfig* config )
@@ -317,6 +322,7 @@ void BlueStatistics::UpdateTelemetry()
 
 void SwitchToFiber( PyTaskletObject* to )
 {
+#if CCP_TELEMETRY_ENABLED
 	if( !to || SchedulerAPI()->PyTasklet_IsMain( to ) )
 	{
 		CcpTelemetrySetActiveFiber( "" );
@@ -326,6 +332,9 @@ void SwitchToFiber( PyTaskletObject* to )
 		std::string taskletName = GetFiberName( to );
 		CcpTelemetrySetActiveFiber( taskletName );
 	}
+#else
+	(void)to;
+#endif
 }
 
 #if CCP_STACKLESS
