@@ -56,6 +56,25 @@ jobs:
             $text = $text.Replace("git@github.com:", "https://github.com/")
             [System.IO.File]::WriteAllText($_.FullName, $text)
           }
+          $pins = @{
+            "carbon-core" = @("https://github.com/rediai-carbon/carbon-core.git", "e704f5208cfcf2ead0d74a43d8d37819229730ae")
+            "carbon-scheduler" = @("https://github.com/rediai-carbon/carbon-scheduler.git", "7a4070383f783b9d0d6f436ad8b6e2c2adef6230")
+            "carbon-io" = @("https://github.com/rediai-carbon/carbon-io.git", "e7ebe5f2636f570a1eedc3a50930fd2a348279ac")
+            "carbon-exefile" = @("https://github.com/rediai-carbon/carbon-exefile.git", "50fcaa0cdcab05a992b7be498efb4e508866d56b")
+            "carbon-blueexposure" = @("https://github.com/rediai-carbon/carbon-blueexposure.git", "5710645741adf743b06940c280c117df6e1fd10e")
+          }
+          foreach ($name in $pins.Keys) {
+            $dest = Join-Path C:\overlay $name
+            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+            Copy-Item (Join-Path C:\reg\ports $name) $dest -Recurse
+            $portfile = Join-Path $dest "portfile.cmake"
+            $text = [System.IO.File]::ReadAllText($portfile)
+            $text = $text.Replace("git@github.com:", "https://github.com/")
+            $text = [regex]::Replace($text, "URL\s+\S+", ("URL " + $pins[$name][0]), 1)
+            $text = [regex]::Replace($text, "REF\s+\S+", ("REF " + $pins[$name][1]), 1)
+            [System.IO.File]::WriteAllText($portfile, $text)
+            Write-Output ("PINNED_SOURCE " + $name + " " + $pins[$name][1])
+          }
           $ports = @(Get-ChildItem C:\overlay -Directory | ForEach-Object { $_.FullName.Replace("\", "/") })
           $joined = $ports -join ";"
           $pre = @(
@@ -81,15 +100,59 @@ jobs:
           Write-Output "BLUE_ARTIFACTS"
           $built
           if (-not $built) { Write-Output "BLUE_ARTIFACT_MISSING"; exit 1 }
+          if (Test-Path C:\b\installed\vcpkg\status) {
+            Select-String -Path C:\b\installed\vcpkg\status -Pattern "^Package: |^Version: " | ForEach-Object { $_.Line }
+          }
+          Get-ChildItem C:\b\installed -Recurse -Include exefile.exe,python.exe,python3*.dll,blue.dll,blue.pyd -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
 
-      - name: Run the discovered tests
+      - name: Exercise the Windows host runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $triplet = "C:\b\installed\x64-windows-145-release"
+          $exe = Get-ChildItem C:\b\blue -Recurse -Filter exefile.exe | Select-Object -First 1
+          if (-not $exe) { Write-Output "EXEFILE_MISSING"; exit 1 }
+          $python = Get-ChildItem $triplet -Recurse -Filter python.exe | Select-Object -First 1
+          if (-not $python) { Write-Output "PYTHON_MISSING"; exit 1 }
+          $version = & $python.FullName -c "import sys; print(sys.version)"
+          Write-Output "PYTHON $version"
+          Write-Output "EXEFILE $($exe.FullName)"
+          $stdlib = (& $python.FullName -c "import sysconfig; print(sysconfig.get_path('stdlib'))").Trim()
+          Write-Output "PYTHON_STDLIB $stdlib"
+          $env:BUILDFLAVOR = "release"
+          $env:PYTHONPATH = "$($exe.DirectoryName);$triplet\bin\python"
+          & $exe.FullName /nocrashreportupload /inherit /buildflavor=release /py -c "import blue" > C:\b\init-fail.txt 2>&1
+          $fail = $LASTEXITCODE
+          Get-Content C:\b\init-fail.txt
+          Write-Output "INIT_FAILURE_EXIT=$fail"
+          if ($fail -eq 0 -or $fail -ge 128) { exit 1 }
+          $reported = Select-String -Path C:\b\init-fail.txt -Pattern "_struct|ModuleNotFoundError|InitBasicModuleSupport|PyCapsule_Import|Blue startup failed|Could not find platform independent libraries|Python path configuration"
+          if (-not $reported) { Write-Output "INIT_FAILURE_UNREPORTED"; exit 1 }
+          $env:PYTHONPATH = "$($exe.DirectoryName);${env:GITHUB_WORKSPACE}\python;$triplet\bin;$triplet\lib;$triplet\bin\python;$stdlib"
+          & $exe.FullName /nocrashreportupload /inherit /buildflavor=release /py -c "import blue, scheduler, _carbonsocket; print('WIN_RUNTIME_OK')" > C:\b\runtime.txt 2>&1
+          $ok = $LASTEXITCODE
+          Get-Content C:\b\runtime.txt
+          Write-Output "WIN_RUNTIME_EXIT=$ok"
+          if ($ok -ne 0) { exit $ok }
+
+      - name: Run the discovered Python runtime tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
+          Set-Location C:\b\blue
+          ctest --output-on-failure --timeout 180 -j 2 -E "BlueCppUnitTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run the C++ harness
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
           cmake --build C:\b\blue --target BlueCppUnitTests
-          $cpp = $LASTEXITCODE
-          Write-Output "CPP_BUILD_EXIT=$cpp"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location C:\b\blue
-          ctest --output-on-failure --timeout 180 -j 2
+          ctest --output-on-failure --timeout 180 -R "BlueCppUnitTests"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -396,8 +396,13 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         separate_arguments(PYTHON_TESTS UNIX_COMMAND ${PYTHON_TESTS_STR})
         foreach(PYTHON_TEST ${PYTHON_TESTS})
             message(STATUS "Found test ${PYTHON_TEST}")
+            if(WIN32)
+                set(CRASH_UPLOAD_ARG /nocrashreportupload)
+            else()
+                set(CRASH_UPLOAD_ARG)
+            endif()
             add_test(NAME ${PYTHON_TEST}
-                COMMAND ${exefile_tool} /inherit /buildflavor=$<LOWER_CASE:$<CONFIG>> /py -m bluetests -v ${PYTHON_TEST}
+                COMMAND ${exefile_tool} ${CRASH_UPLOAD_ARG} /inherit /buildflavor=$<LOWER_CASE:$<CONFIG>> /py -m bluetests -v ${PYTHON_TEST}
                 WORKING_DIRECTORY ${TESTS_WORKING_DIRECTORY}
             )
             if(WIN32)
