@@ -1,0 +1,95 @@
+name: windows-blue-v145
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: windows-blue-v145
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout this Blue head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Confirm the v145 toolset and its ATL header
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $default = Get-ChildItem "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion.v145.default.txt" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $default) {
+            Write-Output "V145_DEFAULT_FILE_MISSING"
+            Get-ChildItem "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion*.txt" | ForEach-Object { Write-Output $_.Name; Get-Content $_.FullName }
+            exit 1
+          }
+          $ver = (Get-Content $default.FullName -Raw).Trim()
+          Write-Output "V145_COMPILER=$ver"
+          $atl = Join-Path $vs "VC\Tools\MSVC\$ver\atlmfc\include\atlbase.h"
+          if (-not (Test-Path $atl)) { Write-Output "V145_ATL_MISSING $atl"; exit 1 }
+          Write-Output "V145_ATL=$atl"
+
+      - name: Fetch the pinned registry and bootstrap vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          git init C:\reg
+          git -C C:\reg remote add origin https://github.com/rediai-carbon/carbon-vcpkg-registry.git
+          git -C C:\reg fetch --depth 1 origin 3548d22bf31e2c0359e447aaa9ef19821b6fae01
+          git -C C:\reg checkout --detach FETCH_HEAD
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git C:\vcpkg
+          cmd /c C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path C:\overlay | Out-Null
+          Get-ChildItem C:\reg\ports -Directory | ForEach-Object {
+            $portfile = Join-Path $_.FullName "portfile.cmake"
+            if ((Test-Path $portfile) -and (Select-String -Path $portfile -Pattern "git@github.com:" -Quiet)) {
+              Copy-Item $_.FullName (Join-Path C:\overlay $_.Name) -Recurse
+            }
+          }
+          Get-ChildItem C:\overlay -Recurse -Filter portfile.cmake | ForEach-Object {
+            $text = [System.IO.File]::ReadAllText($_.FullName)
+            $text = $text.Replace("git@github.com:", "https://github.com/")
+            [System.IO.File]::WriteAllText($_.FullName, $text)
+          }
+          $ports = @(Get-ChildItem C:\overlay -Directory | ForEach-Object { $_.FullName.Replace("\", "/") })
+          $joined = $ports -join ";"
+          $pre = @(
+            'set(VCPKG_TARGET_TRIPLET "x64-windows-145-release" CACHE STRING "")',
+            'set(VCPKG_OVERLAY_TRIPLETS "C:/reg/triplets" CACHE STRING "")',
+            ('set(VCPKG_OVERLAY_PORTS "{0}" CACHE STRING "")' -f $joined),
+            'set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")'
+          )
+          New-Item -ItemType Directory -Force -Path C:\b | Out-Null
+          $pre | Set-Content -Path C:\b\pre.cmake -Encoding ascii
+          Write-Output "OVERLAY_PORTS=$joined"
+
+      - name: Configure and build Blue
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
+          cmake -S $env:GITHUB_WORKSPACE -B C:\b\blue -G Ninja -C C:\b\pre.cmake -DCMAKE_BUILD_TYPE=Release -DVCPKG_INSTALLED_DIR=C:\b\installed -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build C:\b\blue --target Blue
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $built = Get-ChildItem C:\b\blue -Recurse -Include blue.dll,blue.pyd,blue.lib | Select-Object -ExpandProperty FullName
+          Write-Output "BLUE_ARTIFACTS"
+          $built
+          if (-not $built) { Write-Output "BLUE_ARTIFACT_MISSING"; exit 1 }
+
+      - name: Run the discovered tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
+          cmake --build C:\b\blue --target BlueCppUnitTests
+          $cpp = $LASTEXITCODE
+          Write-Output "CPP_BUILD_EXIT=$cpp"
+          Set-Location C:\b\blue
+          ctest --output-on-failure --timeout 180 -j 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
