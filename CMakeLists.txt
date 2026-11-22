@@ -302,6 +302,14 @@ target_link_libraries(Blue
         OpenSSL::SSL
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Exefile owns the one static Python runtime and exports it. Linking
+    # libpython into this module creates a second, uninitialized interpreter.
+    find_package(Python3 COMPONENTS Development REQUIRED)
+    target_include_directories(Blue PRIVATE ${Python3_INCLUDE_DIRS})
+    set_property(TARGET BlueExposure PROPERTY INTERFACE_LINK_LIBRARIES "CcpCore")
+endif()
+
 if(WIN32)
     set_target_properties(Blue PROPERTIES SUFFIX ".pyd")
     target_link_libraries(Blue
