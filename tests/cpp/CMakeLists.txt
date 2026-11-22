@@ -23,8 +23,17 @@ target_include_directories(BlueCppUnitTests
 target_link_libraries(BlueCppUnitTests
     Blue
     GTest::GTest
-    Python3::Python
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Same single-runtime contract as Exefile. The imported extensions resolve
+    # Python symbols from this executable instead of carrying another copy.
+    target_include_directories(BlueCppUnitTests PRIVATE ${Python3_INCLUDE_DIRS})
+    target_link_options(BlueCppUnitTests PRIVATE
+        "SHELL:-Wl,--export-dynamic"
+        "SHELL:-Wl,--whole-archive ${Python3_LIBRARIES} -Wl,--no-whole-archive")
+else()
+    target_link_libraries(BlueCppUnitTests PRIVATE Python3::Python)
+endif()
 
 if(CMAKE_IMPORT_LIBRARY_SUFFIX)
     add_custom_command(TARGET BlueCppUnitTests POST_BUILD
