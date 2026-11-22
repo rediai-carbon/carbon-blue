@@ -60,7 +60,7 @@ jobs:
             "carbon-core" = @("https://github.com/rediai-carbon/carbon-core.git", "beffc4ee091358ea755f5dcb553c60f43e278768")
             "carbon-scheduler" = @("https://github.com/rediai-carbon/carbon-scheduler.git", "7a4070383f783b9d0d6f436ad8b6e2c2adef6230")
             "carbon-io" = @("https://github.com/rediai-carbon/carbon-io.git", "e7ebe5f2636f570a1eedc3a50930fd2a348279ac")
-            "carbon-exefile" = @("https://github.com/rediai-carbon/carbon-exefile.git", "50fcaa0cdcab05a992b7be498efb4e508866d56b")
+            "carbon-exefile" = @("https://github.com/rediai-carbon/carbon-exefile.git", "bf2c480d6433dce8a7b274a2b5b3f431f9ce76aa")
             "carbon-blueexposure" = @("https://github.com/rediai-carbon/carbon-blueexposure.git", "5710645741adf743b06940c280c117df6e1fd10e")
           }
           foreach ($name in $pins.Keys) {
@@ -87,11 +87,21 @@ jobs:
           $pre | Set-Content -Path C:\b\pre.cmake -Encoding ascii
           Write-Output "OVERLAY_PORTS=$joined"
 
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: windows-145-${{ hashFiles('.github/workflows/windows-blue-v145.yml') }}
+          restore-keys: |
+            windows-145-
+
       - name: Configure and build Blue
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
+          New-Item -ItemType Directory -Force -Path C:\vcpkg-binary-cache | Out-Null
+          $env:VCPKG_BINARY_SOURCES = "clear;files,C:/vcpkg-binary-cache,readwrite"
           cmake -S $env:GITHUB_WORKSPACE -B C:\b\blue -G Ninja -C C:\b\pre.cmake -DCMAKE_BUILD_TYPE=Release -DVCPKG_INSTALLED_DIR=C:\b\installed -DBUILD_TESTING=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build C:\b\blue --target Blue
