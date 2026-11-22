@@ -68,6 +68,11 @@ jobs:
             if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
             Copy-Item (Join-Path C:\reg\ports $name) $dest -Recurse
             $portfile = Join-Path $dest "portfile.cmake"
+            if ($name -eq "carbon-core" -or $name -eq "carbon-exefile") {
+              $fixed = "https://raw.githubusercontent.com/rediai-carbon/carbon-vcpkg-registry/fcd2296bf8b37385e639c642be2375d0f5077941/ports/$name/portfile.cmake"
+              Invoke-WebRequest -Uri $fixed -OutFile $portfile
+              Write-Output "HOST_BUILD_TYPE_PORTFILE $name fcd2296bf8b37385e639c642be2375d0f5077941"
+            }
             $text = [System.IO.File]::ReadAllText($portfile)
             $text = $text.Replace("git@github.com:", "https://github.com/")
             $text = [regex]::Replace($text, "URL\s+\S+", ("URL " + $pins[$name][0]), 1)
