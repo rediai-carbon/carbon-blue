@@ -12,6 +12,23 @@ class TestBlueStatistics(unittest.TestCase):
     A set of test cases for BlueStatistics.
     """
 
+    def telemetry_is_compiled_in(self):
+        import blue
+
+        return blue.statistics.IsTelemetryCompiledIn()
+
+    def assert_telemetry_compiled_out(self):
+        """
+        Registration and activation are refused, and no category is stored.
+        """
+        import blue
+
+        with self.assertRaises(blue.TelemetryCategoryError):
+            blue.statistics.RegisterTelemetryCategory("telemetry-compiled-out")
+        self.assertEqual(list(blue.statistics.GetRegisteredTelemetryCategories()), [])
+        with self.assertRaises(blue.TelemetryCategoryError):
+            blue.statistics.SetActiveTelemetryCategories([])
+
     def test_blueStatisticsTelemetryConfig(self):
         """
         Test access to the BlueStatisticsTelemetryConfig object.
@@ -39,6 +56,10 @@ class TestBlueStatistics(unittest.TestCase):
         """
         import blue
 
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
+
         testColor = blue.BlueTelemetryColor.Tomato
 
         category = blue.statistics.RegisterTelemetryCategory(
@@ -54,6 +75,10 @@ class TestBlueStatistics(unittest.TestCase):
         color it ends up with is the very same color it was registered with.
         """
         import blue
+
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
 
         first = blue.statistics.RegisterTelemetryCategory(
             "test category with a color", blue.BlueTelemetryColor.Tomato
@@ -81,6 +106,10 @@ class TestBlueStatistics(unittest.TestCase):
         color it was first registered with.
         """
         import blue
+
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
 
         first = blue.statistics.RegisterTelemetryCategory(
             "test category registered twice", blue.BlueTelemetryColor.Tomato
@@ -120,6 +149,10 @@ class TestBlueStatistics(unittest.TestCase):
         """
         import blue
 
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
+
         blue.statistics.RegisterTelemetryCategory("test category in category list")
 
         names = [category.name for category in blue.statistics.GetRegisteredTelemetryCategories()]
@@ -147,6 +180,10 @@ class TestBlueStatistics(unittest.TestCase):
         """
         import blue
 
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
+
         self.restoreActiveTelemetryCategories()
 
         first = blue.statistics.RegisterTelemetryCategory("test category set active")
@@ -166,6 +203,10 @@ class TestBlueStatistics(unittest.TestCase):
         """
         import blue
 
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
+
         self.restoreActiveTelemetryCategories()
 
         first = blue.statistics.RegisterTelemetryCategory("test category active first")
@@ -184,6 +225,10 @@ class TestBlueStatistics(unittest.TestCase):
         """
         import blue
 
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
+
         self.restoreActiveTelemetryCategories()
 
         category = blue.statistics.RegisterTelemetryCategory("test category set active as a tuple")
@@ -200,6 +245,10 @@ class TestBlueStatistics(unittest.TestCase):
         """
         import blue
 
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
+
         self.restoreActiveTelemetryCategories()
 
         category = blue.statistics.RegisterTelemetryCategory("test category deactivated again")
@@ -211,6 +260,10 @@ class TestBlueStatistics(unittest.TestCase):
 
     def test_setUnsetResetActiveTelemetryCategory(self):
         import blue
+
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
 
         self.restoreActiveTelemetryCategories()
 
@@ -228,6 +281,10 @@ class TestBlueStatistics(unittest.TestCase):
         though every lookup hands out a wrapper of its own.
         """
         import blue
+
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
 
         name = "test category compared by name"
 
@@ -267,6 +324,10 @@ class TestBlueStatistics(unittest.TestCase):
         categories alone.
         """
         import blue
+
+        if not self.telemetry_is_compiled_in():
+            self.assert_telemetry_compiled_out()
+            return
 
         self.restoreActiveTelemetryCategories()
 
