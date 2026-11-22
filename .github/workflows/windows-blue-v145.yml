@@ -57,7 +57,7 @@ jobs:
             [System.IO.File]::WriteAllText($_.FullName, $text)
           }
           $pins = @{
-            "carbon-core" = @("https://github.com/rediai-carbon/carbon-core.git", "e704f5208cfcf2ead0d74a43d8d37819229730ae")
+            "carbon-core" = @("https://github.com/rediai-carbon/carbon-core.git", "beffc4ee091358ea755f5dcb553c60f43e278768")
             "carbon-scheduler" = @("https://github.com/rediai-carbon/carbon-scheduler.git", "7a4070383f783b9d0d6f436ad8b6e2c2adef6230")
             "carbon-io" = @("https://github.com/rediai-carbon/carbon-io.git", "e7ebe5f2636f570a1eedc3a50930fd2a348279ac")
             "carbon-exefile" = @("https://github.com/rediai-carbon/carbon-exefile.git", "50fcaa0cdcab05a992b7be498efb4e508866d56b")
