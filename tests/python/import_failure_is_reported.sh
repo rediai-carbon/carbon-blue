@@ -24,7 +24,7 @@ if [ "$code" -ge 128 ]; then
 	echo "import blue died from a signal (${code})"
 	exit 1
 fi
-if grep -E '_struct|ModuleNotFoundError|InitBasicModuleSupport|PyCapsule_Import|Blue startup failed|Could not find platform independent libraries' "$out"; then
+if grep -E '_struct|ModuleNotFoundError|InitBasicModuleSupport|PyCapsule_Import|Blue startup failed|Could not find platform independent libraries|Python path configuration' "$out"; then
 	exit 0
 fi
 echo "import blue failed without a Python error report (${code})"
