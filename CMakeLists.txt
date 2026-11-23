@@ -368,12 +368,23 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         else()
             set(EXEFILE_TOOL_NAME exefile)
         endif()
-        find_program(exefile_tool ${EXEFILE_TOOL_NAME}
-            NO_CACHE REQUIRED
-            PATHS
-                "${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/carbon-exefile"
-                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/carbon-exefile"
-        )
+        set(exefile_tool "")
+        foreach(triplet IN ITEMS "${VCPKG_TARGET_TRIPLET}" "${VCPKG_HOST_TRIPLET}" "x64-windows-145-release" "x64-windows")
+            if(exefile_tool)
+                break()
+            endif()
+            foreach(exefile_name IN ITEMS "exefile.exe" "exefile")
+                set(exefile_candidate "${VCPKG_INSTALLED_DIR}/${triplet}/tools/carbon-exefile/${exefile_name}")
+                if(EXISTS "${exefile_candidate}")
+                    set(exefile_tool "${exefile_candidate}")
+                    break()
+                endif()
+            endforeach()
+        endforeach()
+        if(NOT exefile_tool)
+            message(FATAL_ERROR "exefile was not installed under ${VCPKG_INSTALLED_DIR} (target=${VCPKG_TARGET_TRIPLET}, host=${VCPKG_HOST_TRIPLET})")
+        endif()
+        message(STATUS "Using exefile ${exefile_tool}")
 
         if (WIN32)
             add_custom_command(TARGET Blue POST_BUILD
