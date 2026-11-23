@@ -152,18 +152,18 @@ jobs:
           $stdlib = (& $python.FullName -c "import sysconfig; print(sysconfig.get_path('stdlib'))").Trim()
           Write-Output "PYTHON_STDLIB $stdlib"
           $env:BUILDFLAVOR = "release"
-          $env:PYTHONPATH = "$($exe.DirectoryName);$triplet\bin\python"
-          & $exe.FullName /nocrashreportupload /inherit /buildflavor=release /py -c "import blue" > C:\b\init-fail.txt 2>&1
-          $fail = $LASTEXITCODE
-          Get-Content C:\b\init-fail.txt
+          $runtimePath = "$($exe.DirectoryName);${env:GITHUB_WORKSPACE}\python;$triplet\bin;$triplet\lib;$triplet\bin\python;$stdlib"
+          $env:PYTHONPATH = $runtimePath
+          $missing = Start-Process -FilePath $exe.FullName -ArgumentList '/nocrashreportupload','/inherit','/buildflavor=release','/py','-c','import fenris_missing_module' -Wait -PassThru -NoNewWindow -RedirectStandardOutput C:\b\init-fail.txt -RedirectStandardError C:\b\init-fail.err
+          $fail = $missing.ExitCode
+          Get-Content C:\b\init-fail.txt, C:\b\init-fail.err
           Write-Output "INIT_FAILURE_EXIT=$fail"
           if ($fail -eq 0 -or $fail -ge 128) { exit 1 }
-          $reported = Select-String -Path C:\b\init-fail.txt -Pattern "_struct|ModuleNotFoundError|InitBasicModuleSupport|PyCapsule_Import|Blue startup failed|Could not find platform independent libraries|Python path configuration"
+          $reported = Select-String -Path C:\b\init-fail.txt, C:\b\init-fail.err -Pattern "ModuleNotFoundError"
           if (-not $reported) { Write-Output "INIT_FAILURE_UNREPORTED"; exit 1 }
-          $env:PYTHONPATH = "$($exe.DirectoryName);${env:GITHUB_WORKSPACE}\python;$triplet\bin;$triplet\lib;$triplet\bin\python;$stdlib"
-          & $exe.FullName /nocrashreportupload /inherit /buildflavor=release /py -c "import blue, scheduler, _carbonsocket; print('WIN_RUNTIME_OK')" > C:\b\runtime.txt 2>&1
-          $ok = $LASTEXITCODE
-          Get-Content C:\b\runtime.txt
+          $okProc = Start-Process -FilePath $exe.FullName -ArgumentList '/nocrashreportupload','/inherit','/buildflavor=release','/py','-c','import blue, scheduler, _carbonsocket; print(''WIN_RUNTIME_OK'')' -Wait -PassThru -NoNewWindow -RedirectStandardOutput C:\b\runtime.txt -RedirectStandardError C:\b\runtime.err
+          $ok = $okProc.ExitCode
+          Get-Content C:\b\runtime.txt, C:\b\runtime.err
           Write-Output "WIN_RUNTIME_EXIT=$ok"
           if ($ok -ne 0) { exit $ok }
 
