@@ -269,12 +269,27 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
           $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
           cmake --build C:\b\blue --target BlueCppUnitTests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Set-Location C:\b\blue
-          ctest --output-on-failure --timeout 180 -R "BlueCppUnitTests"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $triplet = "C:\b\installed\x64-windows-145-release"
+          $python = Get-ChildItem $triplet -Recurse -Filter python.exe | Select-Object -First 1
+          if (-not $python) { Write-Output "PYTHON_MISSING"; exit 1 }
+          $stdlib = (& $python.FullName -c "import sysconfig; print(sysconfig.get_path('stdlib'))").Trim()
+          $env:PYTHON_STDLIB = $stdlib
+          $env:PYTHONHOME = Split-Path $stdlib -Parent
+          $env:IMPORT_PATH = $triplet
+          $env:RES_PATH = "$env:GITHUB_WORKSPACE\tests\cpp\res"
+          $env:BUILDFLAVOR = "release"
+          $harness = "C:\b\blue\tests\cpp\BlueCppUnitTests.exe"
+          if (-not (Test-Path $harness)) { Write-Output "CPP_HARNESS_MISSING"; exit 1 }
+          Write-Output "CPP_HARNESS $harness"
+          Set-Location (Split-Path $harness)
+          & $harness --gtest_color=no
+          $tests = $LASTEXITCODE
+          Write-Output "CPP_HARNESS_EXIT=$tests"
+          if ($tests -ne 0) { exit $tests }
 
       - name: Upload runtime diagnostics
         if: failure()
