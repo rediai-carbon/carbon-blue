@@ -4,6 +4,7 @@ on:
   pull_request:
 
 permissions:
+  actions: write
   contents: read
 
 jobs:
@@ -14,6 +15,29 @@ jobs:
     steps:
       - name: Checkout this Blue head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Preflight the runtime scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          New-Item -ItemType Directory -Force -Path C:\b | Out-Null
+          Set-Content -Path C:\b\argv.py -Encoding ascii -Value "import sys`r`nprint('PY_ARGV_COUNT', len(sys.argv))`r`nfor index, arg in enumerate(sys.argv):`r`n    print('PY_ARGV', index, arg)`r`n"
+          Set-Content -Path C:\b\missing_module.py -Encoding ascii -Value "import fenris_missing_module`r`n"
+          Set-Content -Path C:\b\runtime_ok.py -Encoding ascii -Value "import blue, scheduler, _carbonsocket`r`nprint('WIN_RUNTIME_OK')`r`n"
+          $python = (Get-Command python).Source
+          & $python C:\b\missing_module.py > C:\b\preflight-missing.txt 2>&1
+          $fail = $LASTEXITCODE
+          Get-Content C:\b\preflight-missing.txt
+          Write-Output "PREFLIGHT_MISSING_EXIT=$fail"
+          if ($fail -eq 0 -or $fail -ge 128) { exit 1 }
+          $reported = Select-String -Path C:\b\preflight-missing.txt -Pattern "ModuleNotFoundError"
+          if (-not $reported) { Write-Output "PREFLIGHT_MISSING_UNREPORTED"; exit 1 }
+          & $python C:\b\argv.py > C:\b\preflight-argv.txt 2>&1
+          if ($LASTEXITCODE -ne 0) { Get-Content C:\b\preflight-argv.txt; exit $LASTEXITCODE }
+          $argv = Get-Content C:\b\preflight-argv.txt -Raw
+          if ($argv -notmatch "missing_module.py" -and $argv -notmatch "argv.py") { Write-Output $argv; Write-Output "PREFLIGHT_ARGV_UNREPORTED"; exit 1 }
+          Write-Output "RUNTIME_SCRIPT_PREFLIGHT_OK"
 
       - name: Confirm the v145 toolset and its ATL header
         shell: pwsh
@@ -37,11 +61,27 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $pin = @{}
+          Get-Content "$env:GITHUB_WORKSPACE\.github\workflows\windows-v145-pins.txt" | ForEach-Object {
+            $line = $_.Trim()
+            if (-not $line -or $line.StartsWith("#")) { return }
+            $parts = $line.Split("=", 2)
+            $pin[$parts[0].Trim()] = $parts[1].Trim()
+          }
+          foreach ($required in @("vcpkg", "registry", "host_portfile", "triplet", "toolset", "carbon-core", "carbon-scheduler", "carbon-io", "carbon-exefile", "carbon-blueexposure")) {
+            if (-not $pin.ContainsKey($required) -or -not $pin[$required]) { throw "Missing pin $required" }
+          }
+          Write-Output "PINNED_VCPKG $($pin.vcpkg)"
+          Write-Output "PINNED_REGISTRY $($pin.registry)"
+          Write-Output "PINNED_TRIPLET $($pin.triplet)"
           git init C:\reg
           git -C C:\reg remote add origin https://github.com/rediai-carbon/carbon-vcpkg-registry.git
-          git -C C:\reg fetch --depth 1 origin 3548d22bf31e2c0359e447aaa9ef19821b6fae01
+          git -C C:\reg fetch --depth 1 origin $pin.registry
           git -C C:\reg checkout --detach FETCH_HEAD
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git C:\vcpkg
+          git init C:\vcpkg
+          git -C C:\vcpkg remote add origin https://github.com/microsoft/vcpkg.git
+          git -C C:\vcpkg fetch --depth 1 origin $pin.vcpkg
+          git -C C:\vcpkg checkout --detach FETCH_HEAD
           cmd /c C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force -Path C:\overlay | Out-Null
@@ -57,11 +97,11 @@ jobs:
             [System.IO.File]::WriteAllText($_.FullName, $text)
           }
           $pins = @{
-            "carbon-core" = @("https://github.com/rediai-carbon/carbon-core.git", "beffc4ee091358ea755f5dcb553c60f43e278768")
-            "carbon-scheduler" = @("https://github.com/rediai-carbon/carbon-scheduler.git", "7a4070383f783b9d0d6f436ad8b6e2c2adef6230")
-            "carbon-io" = @("https://github.com/rediai-carbon/carbon-io.git", "e7ebe5f2636f570a1eedc3a50930fd2a348279ac")
-            "carbon-exefile" = @("https://github.com/rediai-carbon/carbon-exefile.git", "bf2c480d6433dce8a7b274a2b5b3f431f9ce76aa")
-            "carbon-blueexposure" = @("https://github.com/rediai-carbon/carbon-blueexposure.git", "5710645741adf743b06940c280c117df6e1fd10e")
+            "carbon-core" = @("https://github.com/rediai-carbon/carbon-core.git", $pin["carbon-core"])
+            "carbon-scheduler" = @("https://github.com/rediai-carbon/carbon-scheduler.git", $pin["carbon-scheduler"])
+            "carbon-io" = @("https://github.com/rediai-carbon/carbon-io.git", $pin["carbon-io"])
+            "carbon-exefile" = @("https://github.com/rediai-carbon/carbon-exefile.git", $pin["carbon-exefile"])
+            "carbon-blueexposure" = @("https://github.com/rediai-carbon/carbon-blueexposure.git", $pin["carbon-blueexposure"])
           }
           foreach ($name in $pins.Keys) {
             $dest = Join-Path C:\overlay $name
@@ -69,9 +109,9 @@ jobs:
             Copy-Item (Join-Path C:\reg\ports $name) $dest -Recurse
             $portfile = Join-Path $dest "portfile.cmake"
             if ($name -eq "carbon-core" -or $name -eq "carbon-exefile") {
-              $fixed = "https://raw.githubusercontent.com/rediai-carbon/carbon-vcpkg-registry/fcd2296bf8b37385e639c642be2375d0f5077941/ports/$name/portfile.cmake"
+              $fixed = "https://raw.githubusercontent.com/rediai-carbon/carbon-vcpkg-registry/$($pin.host_portfile)/ports/$name/portfile.cmake"
               Invoke-WebRequest -Uri $fixed -OutFile $portfile
-              Write-Output "HOST_BUILD_TYPE_PORTFILE $name fcd2296bf8b37385e639c642be2375d0f5077941"
+              Write-Output "HOST_BUILD_TYPE_PORTFILE $name $($pin.host_portfile)"
             }
             $text = [System.IO.File]::ReadAllText($portfile)
             $text = $text.Replace("git@github.com:", "https://github.com/")
@@ -82,8 +122,12 @@ jobs:
           }
           $ports = @(Get-ChildItem C:\overlay -Directory | ForEach-Object { $_.FullName.Replace("\", "/") })
           $joined = $ports -join ";"
+          # Exefile is a host dependency. Using the default x64-windows host
+          # triplet rebuilds python, Tracy, protobuf and OpenSSL in debug and
+          # release. The runner is x64, so the v145 release triplet can be both.
           $pre = @(
-            'set(VCPKG_TARGET_TRIPLET "x64-windows-145-release" CACHE STRING "")',
+            ('set(VCPKG_TARGET_TRIPLET "{0}" CACHE STRING "")' -f $pin.triplet),
+            ('set(VCPKG_HOST_TRIPLET "{0}" CACHE STRING "")' -f $pin.triplet),
             'set(VCPKG_OVERLAY_TRIPLETS "C:/reg/triplets" CACHE STRING "")',
             ('set(VCPKG_OVERLAY_PORTS "{0}" CACHE STRING "")' -f $joined),
             'set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")'
@@ -93,11 +137,13 @@ jobs:
           Write-Output "OVERLAY_PORTS=$joined"
 
       - name: Restore the vcpkg binary cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: vcpkg-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: C:\vcpkg-binary-cache
-          key: windows-145-${{ hashFiles('.github/workflows/windows-blue-v145.yml') }}
+          key: blue-win-v145-${{ hashFiles('.github/workflows/windows-v145-pins.txt') }}
           restore-keys: |
+            blue-win-v145-
             windows-145-
 
       - name: Enter the v145 toolset for the outer build
@@ -110,14 +156,26 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
           $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
           New-Item -ItemType Directory -Force -Path C:\vcpkg-binary-cache | Out-Null
           $env:VCPKG_BINARY_SOURCES = "clear;files,C:/vcpkg-binary-cache,readwrite"
           $cl = (Get-Command cl.exe).Source
           Write-Output "OUTER_CL=$cl"
+          Write-Output "VCPKG_CACHE_HIT=${{ steps.vcpkg-cache.outputs.cache-hit }}"
+          Write-Output "VCPKG_CACHE_PRIMARY=${{ steps.vcpkg-cache.outputs.cache-primary-key }}"
+          Write-Output "VCPKG_CACHE_MATCHED=${{ steps.vcpkg-cache.outputs.cache-matched-key }}"
           if ($cl -notmatch "\\14\.52\.") { throw "Outer compiler is not the v145 14.52 toolset: $cl" }
-          cmake -S $env:GITHUB_WORKSPACE -B C:\b\blue -G Ninja -C C:\b\pre.cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$cl" -DCMAKE_CXX_COMPILER="$cl" -DVCPKG_INSTALLED_DIR=C:\b\installed -DBUILD_TESTING=ON
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S $env:GITHUB_WORKSPACE -B C:\b\blue -G Ninja -C C:\b\pre.cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=$cl" "-DCMAKE_CXX_COMPILER=$cl" -DVCPKG_INSTALLED_DIR=C:\b\installed -DBUILD_TESTING=ON *>&1 | Tee-Object -FilePath C:\b\configure.log
+          $configure = $LASTEXITCODE
+          $log = @(Get-Content C:\b\configure.log)
+          $restored = @($log | Where-Object { $_ -match "Restored .+ from" }).Count
+          $built = @($log | Where-Object { $_ -match "Building [^:]+:" }).Count
+          $hostOnly = @($log | Where-Object { $_ -match ":x64-windows:" }).Count
+          Write-Output "VCPKG_RESTORED=$restored"
+          Write-Output "VCPKG_BUILT=$built"
+          Write-Output "VCPKG_DEFAULT_HOST_TRIPLET_LINES=$hostOnly"
+          if ($configure -ne 0) { exit $configure }
           $compilers = Select-String -Path C:\b\blue\CMakeCache.txt -Pattern "^CMAKE_C_COMPILER:|^CMAKE_CXX_COMPILER:"
           $compilers | ForEach-Object { Write-Output $_.Line }
           $joined = ($compilers | ForEach-Object { $_.Line }) -join "`n"
@@ -135,6 +193,24 @@ jobs:
           }
           Get-ChildItem C:\b\installed -Recurse -Include exefile.exe,python.exe,python3*.dll,blue.dll,blue.pyd -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty FullName
+
+      - name: Record packaged vcpkg binaries
+        id: vcpkg-packages
+        if: always()
+        shell: pwsh
+        run: |
+          $zips = @(Get-ChildItem C:\vcpkg-binary-cache -Recurse -Filter *.zip -ErrorAction SilentlyContinue)
+          Write-Output "VCPKG_CACHE_ZIP_COUNT=$($zips.Count)"
+          $produced = if ($zips.Count -gt 0) { "true" } else { "false" }
+          "produced=$produced" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+
+      - name: Save the vcpkg binary cache
+        if: always() && steps.vcpkg-packages.outputs.produced == 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       - name: Exercise the Windows host runtime
         shell: pwsh
@@ -155,16 +231,28 @@ jobs:
           $env:PYTHONHOME = Split-Path $stdlib -Parent
           $env:PYTHONPATH = "$($exe.DirectoryName);${env:GITHUB_WORKSPACE}\python;$triplet\bin;$triplet\lib;$triplet\bin\python;$stdlib"
           Write-Output "PYTHONHOME $env:PYTHONHOME"
-          & $exe.FullName /nocrashreportupload /inherit /buildflavor=release /py -c "import fenris_missing_module" > C:\b\init-fail.txt 2>&1
-          $fail = $LASTEXITCODE
-          Get-Content C:\b\init-fail.txt
+          # Start-Process waits and returns the process exit code. The call
+          # operator's redirection reported exit 0 and captured no output for
+          # this executable. Script paths have no spaces, so argument joining
+          # cannot split the Python program.
+          function Invoke-BluePython([string]$Script, [string]$Out, [string]$Err) {
+            $proc = Start-Process -FilePath $exe.FullName -ArgumentList @(
+              "/nocrashreportupload", "/inherit", "/buildflavor=release", "/py", $Script
+            ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $Out -RedirectStandardError $Err
+            Get-Content $Out, $Err -ErrorAction SilentlyContinue | Write-Host
+            return $proc.ExitCode
+          }
+          $argvExit = Invoke-BluePython "C:\b\argv.py" "C:\b\argv.txt" "C:\b\argv.err"
+          Write-Output "ARGV_EXIT=$argvExit"
+          if ($argvExit -ne 0) { exit $argvExit }
+          $argv = Get-Content C:\b\argv.txt, C:\b\argv.err -Raw
+          if ($argv -notmatch "argv.py") { Write-Output "ARGV_SCRIPT_NOT_FORWARDED"; exit 1 }
+          $fail = Invoke-BluePython "C:\b\missing_module.py" "C:\b\init-fail.txt" "C:\b\init-fail.err"
           Write-Output "INIT_FAILURE_EXIT=$fail"
           if ($fail -eq 0 -or $fail -ge 128) { exit 1 }
-          $reported = Select-String -Path C:\b\init-fail.txt -Pattern "ModuleNotFoundError"
+          $reported = Select-String -Path C:\b\init-fail.txt, C:\b\init-fail.err -Pattern "ModuleNotFoundError"
           if (-not $reported) { Write-Output "INIT_FAILURE_UNREPORTED"; exit 1 }
-          & $exe.FullName /nocrashreportupload /inherit /buildflavor=release /py -c "import blue, scheduler, _carbonsocket; print('WIN_RUNTIME_OK')" > C:\b\runtime.txt 2>&1
-          $ok = $LASTEXITCODE
-          Get-Content C:\b\runtime.txt
+          $ok = Invoke-BluePython "C:\b\runtime_ok.py" "C:\b\runtime.txt" "C:\b\runtime.err"
           Write-Output "WIN_RUNTIME_EXIT=$ok"
           if ($ok -ne 0) { exit $ok }
 
@@ -187,3 +275,20 @@ jobs:
           Set-Location C:\b\blue
           ctest --output-on-failure --timeout 180 -R "BlueCppUnitTests"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload runtime diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-blue-runtime-logs
+          path: |
+            C:\b\preflight-missing.txt
+            C:\b\argv.txt
+            C:\b\argv.err
+            C:\b\init-fail.txt
+            C:\b\init-fail.err
+            C:\b\runtime.txt
+            C:\b\runtime.err
+            C:\b\configure.log
+            C:\b\blue\Testing\Temporary\LastTest.log
+          if-no-files-found: warn
