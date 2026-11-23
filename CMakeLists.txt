@@ -368,13 +368,18 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         else()
             set(EXEFILE_TOOL_NAME exefile)
         endif()
-        find_program(exefile_tool ${EXEFILE_TOOL_NAME} NO_CACHE)
+        find_program(exefile_tool ${EXEFILE_TOOL_NAME}
+            NO_CACHE REQUIRED
+            PATHS
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/carbon-exefile"
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/carbon-exefile"
+        )
 
         if (WIN32)
             add_custom_command(TARGET Blue POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy ${exefile_tool} $<TARGET_FILE_DIR:Blue>
             )
-            set(exefile_tool $<TARGET_FILE_DIR:Blue>/${EXEFILE_TOOL_NAME})
+            set(exefile_tool "$<TARGET_FILE_DIR:Blue>/${EXEFILE_TOOL_NAME}.exe")
             if (WIN32)
                 add_custom_command(
                         TARGET Blue POST_BUILD
