@@ -100,6 +100,12 @@ jobs:
           restore-keys: |
             windows-145-
 
+      - name: Enter the v145 toolset for the outer build
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+          toolset: 14.52
+
       - name: Configure and build Blue
         shell: pwsh
         run: |
@@ -107,7 +113,16 @@ jobs:
           $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
           New-Item -ItemType Directory -Force -Path C:\vcpkg-binary-cache | Out-Null
           $env:VCPKG_BINARY_SOURCES = "clear;files,C:/vcpkg-binary-cache,readwrite"
-          cmake -S $env:GITHUB_WORKSPACE -B C:\b\blue -G Ninja -C C:\b\pre.cmake -DCMAKE_BUILD_TYPE=Release -DVCPKG_INSTALLED_DIR=C:\b\installed -DBUILD_TESTING=ON
+          $cl = (Get-Command cl.exe).Source
+          Write-Output "OUTER_CL=$cl"
+          if ($cl -notmatch "\\14\.52\.") { throw "Outer compiler is not the v145 14.52 toolset: $cl" }
+          cmake -S $env:GITHUB_WORKSPACE -B C:\b\blue -G Ninja -C C:\b\pre.cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$cl" -DCMAKE_CXX_COMPILER="$cl" -DVCPKG_INSTALLED_DIR=C:\b\installed -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $compilers = Select-String -Path C:\b\blue\CMakeCache.txt -Pattern "^CMAKE_C_COMPILER:|^CMAKE_CXX_COMPILER:"
+          $compilers | ForEach-Object { Write-Output $_.Line }
+          $joined = ($compilers | ForEach-Object { $_.Line }) -join "`n"
+          if ($joined -match "mingw") { throw "Outer build selected MinGW" }
+          if ($joined -notmatch "14\.52") { throw "Outer build did not record the v145 compiler" }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build C:\b\blue --target Blue
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
