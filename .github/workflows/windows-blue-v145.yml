@@ -169,12 +169,25 @@ jobs:
           cmake -S $env:GITHUB_WORKSPACE -B C:\b\blue -G Ninja -C C:\b\pre.cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=$cl" "-DCMAKE_CXX_COMPILER=$cl" -DVCPKG_INSTALLED_DIR=C:\b\installed -DBUILD_TESTING=ON *>&1 | Tee-Object -FilePath C:\b\configure.log
           $configure = $LASTEXITCODE
           $log = @(Get-Content C:\b\configure.log)
-          $restored = @($log | Where-Object { $_ -match "Restored .+ from" }).Count
+          # vcpkg logs one summary, "Restored N package(s) from <cache>".
+          # Matching "Restored .+ from" counts that summary once, not N.
+          $summary = @($log | Where-Object { $_ -match "Restored (\d+) package\(s\)" })
+          if ($summary.Count -gt 0 -and $summary[-1] -match "Restored (\d+) package\(s\)") {
+            $restored = [int]$Matches[1]
+          } else {
+            $restored = @($log | Where-Object { $_ -match "^Restored .+ from " }).Count
+          }
+          $handled = @($log | Where-Object { $_ -match "Elapsed time to handle .+:" }).Count
           $built = @($log | Where-Object { $_ -match "Building [^:]+:" }).Count
           $hostOnly = @($log | Where-Object { $_ -match ":x64-windows:" }).Count
+          Write-Output "VCPKG_RESTORE_SUMMARY $($summary[-1])"
           Write-Output "VCPKG_RESTORED=$restored"
+          Write-Output "VCPKG_HANDLED=$handled"
           Write-Output "VCPKG_BUILT=$built"
           Write-Output "VCPKG_DEFAULT_HOST_TRIPLET_LINES=$hostOnly"
+          $cacheHit = "${{ steps.vcpkg-cache.outputs.cache-hit }}"
+          if ($cacheHit -eq "true" -and $built -ne 0) { throw "Exact cache hit rebuilt $built packages" }
+          if ($cacheHit -eq "true" -and $restored -lt 1) { throw "Exact cache hit did not report a restored package count" }
           if ($configure -ne 0) { exit $configure }
           $compilers = Select-String -Path C:\b\blue\CMakeCache.txt -Pattern "^CMAKE_C_COMPILER:|^CMAKE_CXX_COMPILER:"
           $compilers | ForEach-Object { Write-Output $_.Line }
@@ -225,6 +238,18 @@ jobs:
           $version = & $python.FullName -c "import sys; print(sys.version)"
           Write-Output "PYTHON $version"
           Write-Output "EXEFILE $($exe.FullName)"
+          $pin = @{}
+          Get-Content "$env:GITHUB_WORKSPACE\.github\workflows\windows-v145-pins.txt" | ForEach-Object {
+            $line = $_.Trim()
+            if (-not $line -or $line.StartsWith("#")) { return }
+            $parts = $line.Split("=", 2)
+            $pin[$parts[0].Trim()] = $parts[1].Trim()
+          }
+          $header = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rediai-carbon/carbon-exefile/$($pin['carbon-exefile'])/CommandArguments.h").Content
+          if ($header -notmatch "uploadMinidump\( true \)") { throw "Pinned exefile no longer enables Windows crash upload by default" }
+          Write-Output "CRASH_UPLOAD_DEFAULT=windows-on"
+          Write-Output "CRASH_UPLOAD_TEST_FLAG=/nocrashreportupload"
+          Write-Output "CRASH_UPLOAD_SOURCE=$($pin['carbon-exefile'])"
           $stdlib = (& $python.FullName -c "import sysconfig; print(sysconfig.get_path('stdlib'))").Trim()
           Write-Output "PYTHON_STDLIB $stdlib"
           $env:BUILDFLAVOR = "release"
@@ -286,9 +311,8 @@ jobs:
           if (-not (Test-Path $harness)) { Write-Output "CPP_HARNESS_MISSING"; exit 1 }
           Write-Output "CPP_HARNESS $harness"
           Set-Location (Split-Path $harness)
-          # The suite finalizes Python after every test. Run the failing case
-          # first, in its own process, so a heap corruption can be attributed
-          # either to that case or to the next initialization.
+          # The resource suite keeps one interpreter. The isolated process
+          # remains so a single-case failure is visible before the suite.
           Write-Output "CPP_ISOLATED_BEGIN"
           & $harness --gtest_color=no --gtest_filter=BlueResManTest.CallLoadObjectWithGil
           Write-Output "CPP_ISOLATED_GIL_EXIT=$LASTEXITCODE"
@@ -297,6 +321,110 @@ jobs:
           $tests = $LASTEXITCODE
           Write-Output "CPP_HARNESS_EXIT=$tests"
           if ($tests -ne 0) { exit $tests }
+
+      - name: Build and execute d3dinfo and ime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          cmake --install C:\b\blue --prefix C:\b\blue-prefix
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cl = (Get-Command cl.exe).Source
+          if ($cl -notmatch "\\14\.52\.") { throw "Consumer compiler is not the v145 14.52 toolset: $cl" }
+          function Build-Consumer([string]$Name, [string]$Url, [string]$Sha, [string]$Target) {
+            $src = "C:\src\$Name"
+            git init $src
+            git -C $src remote add origin $Url
+            git -C $src fetch --depth 1 origin $Sha
+            if ($LASTEXITCODE -ne 0) { throw "Could not fetch $Name $Sha" }
+            git -C $src checkout --detach FETCH_HEAD
+            if ($LASTEXITCODE -ne 0) { throw "Could not check out $Name $Sha" }
+            $head = (git -C $src rev-parse HEAD).Trim()
+            if ($head -ne $Sha) { throw "$Name checked out $head, expected $Sha" }
+            Write-Output "CONSUMER_SOURCE $Name $head"
+            cmake -S $src -B "C:\b\$Name" -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=C:/b/blue-prefix;C:/b/installed/x64-windows-145-release" "-DCMAKE_C_COMPILER=$cl" "-DCMAKE_CXX_COMPILER=$cl"
+            if ($LASTEXITCODE -ne 0) { throw "Configure failed for $Name" }
+            cmake --build "C:\b\$Name" --target $Target
+            if ($LASTEXITCODE -ne 0) { throw "Build failed for $Name" }
+          }
+          Build-Consumer "carbon-d3dinfo" "https://github.com/rediai-carbon/carbon-d3dinfo.git" "4728fab6ea27b1c0997dfabeb7c67d5f992d484a" "d3dinfo"
+          Build-Consumer "carbon-ime" "https://github.com/rediai-carbon/carbon-ime.git" "d21ed5a81f6ac8a8c5252aadcbdd92c9dfc30795" "Ime"
+          $ext = "C:\b\extensions"
+          New-Item -ItemType Directory -Force -Path $ext | Out-Null
+          foreach ($built in @(
+            @{ Filter = "_d3dinfo.pyd"; Fallback = "_d3dinfo.dll"; Dest = "_d3dinfo.pyd" },
+            @{ Filter = "_ime.pyd"; Fallback = "_ime.dll"; Dest = "_ime.pyd" }
+          )) {
+            $file = Get-ChildItem "C:\b" -Recurse -Filter $built.Filter -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $file) {
+              $file = Get-ChildItem "C:\b" -Recurse -Filter $built.Fallback -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if (-not $file) { throw "Missing extension $($built.Dest)" }
+            Copy-Item $file.FullName (Join-Path $ext $built.Dest) -Force
+            Write-Output "EXTENSION $($built.Dest) $($file.FullName)"
+          }
+          $triplet = "C:\b\installed\x64-windows-145-release"
+          $exe = Get-ChildItem C:\b\blue -Recurse -Filter exefile.exe | Select-Object -First 1
+          $python = Get-ChildItem $triplet -Recurse -Filter python.exe | Select-Object -First 1
+          $stdlib = (& $python.FullName -c "import sysconfig; print(sysconfig.get_path('stdlib'))").Trim()
+          $expected = (& $python.FullName -c "import sys; print(sys.version)").Trim()
+          $env:BUILDFLAVOR = "release"
+          $env:PYTHONHOME = Split-Path $stdlib -Parent
+          $env:PYTHONPATH = "$ext;$($exe.DirectoryName);${env:GITHUB_WORKSPACE}\python;$triplet\bin;$triplet\lib;$triplet\bin\python;$stdlib"
+          Set-Content -Path C:\b\d3dinfo_run.py -Encoding ascii -Value @"
+import sys
+print("D3DINFO_PYTHON", sys.version)
+import blue
+ext = blue.LoadExtension("_d3dinfo")
+d3d = ext.D3D11Info()
+d3d.InitializeD3D()
+count = d3d.GetAdapterCount()
+print("D3D11_ADAPTER_COUNT", count)
+for index in range(count):
+    info = d3d.GetAdapterInfo(index)
+    print("D3D11_ADAPTER", index, info.description, info.vendorID, info.deviceID)
+d3d.ShutdownD3D()
+d12 = ext.D3D12Info()
+d12.InitializeD3D()
+count12 = d12.GetAdapterCount()
+print("D3D12_ADAPTER_COUNT", count12)
+for index in range(count12):
+    info = d12.GetAdapterInfo(index)
+    print("D3D12_ADAPTER", index, info.description, info.vendorID, info.deviceID)
+d12.ShutdownD3D()
+print("D3DINFO_EXECUTED")
+"@
+          Set-Content -Path C:\b\ime_run.py -Encoding ascii -Value @"
+import sys
+print("IME_PYTHON", sys.version)
+import blue
+ext = blue.LoadExtension("_ime")
+ime = ext.Ime()
+layout = ime.GetKeyboardLayout()
+print("IME_KEYBOARD_LAYOUT", layout)
+if not layout:
+    raise SystemExit("GetKeyboardLayout returned an empty layout")
+print("IME_EXECUTED")
+"@
+          function Invoke-BluePython([string]$Script, [string]$Out, [string]$Err) {
+            $proc = Start-Process -FilePath $exe.FullName -ArgumentList @(
+              "/nocrashreportupload", "/inherit", "/buildflavor=release", "/py", $Script
+            ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $Out -RedirectStandardError $Err
+            Get-Content $Out, $Err -ErrorAction SilentlyContinue | Write-Host
+            return $proc.ExitCode
+          }
+          $d3d = Invoke-BluePython "C:\b\d3dinfo_run.py" "C:\b\d3dinfo.txt" "C:\b\d3dinfo.err"
+          Write-Output "D3DINFO_EXIT=$d3d"
+          if ($d3d -ne 0) { exit $d3d }
+          $d3dOut = Get-Content C:\b\d3dinfo.txt, C:\b\d3dinfo.err -Raw
+          if ($d3dOut -notmatch "D3DINFO_EXECUTED") { throw "d3dinfo did not complete adapter enumeration" }
+          if ($d3dOut -notmatch [regex]::Escape($expected)) { throw "d3dinfo did not use the verified Python $expected" }
+          $ime = Invoke-BluePython "C:\b\ime_run.py" "C:\b\ime.txt" "C:\b\ime.err"
+          Write-Output "IME_EXIT=$ime"
+          if ($ime -ne 0) { exit $ime }
+          $imeOut = Get-Content C:\b\ime.txt, C:\b\ime.err -Raw
+          if ($imeOut -notmatch "IME_EXECUTED") { throw "ime did not report a keyboard layout" }
+          if ($imeOut -notmatch [regex]::Escape($expected)) { throw "ime did not use the verified Python $expected" }
 
       - name: Upload runtime diagnostics
         if: failure()
@@ -311,6 +439,10 @@ jobs:
             C:\b\init-fail.err
             C:\b\runtime.txt
             C:\b\runtime.err
+            C:\b\d3dinfo.txt
+            C:\b\d3dinfo.err
+            C:\b\ime.txt
+            C:\b\ime.err
             C:\b\configure.log
             C:\b\blue\Testing\Temporary\LastTest.log
           if-no-files-found: warn
