@@ -303,11 +303,14 @@ target_link_libraries(Blue
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # Exefile owns the one static Python runtime and exports it. Linking
-    # libpython into this module creates a second, uninitialized interpreter.
+    # The Linux triplet ships one shared libpython. blue.so and exefile both
+    # record DT_NEEDED for that SONAME, and the dynamic linker maps it once.
+    # Stripping Python3::Python here leaves blue.so with undefined Python
+    # symbols, which this linker rejects. A second interpreter would require
+    # a second static copy, which this link does not create.
     find_package(Python3 COMPONENTS Development REQUIRED)
     target_include_directories(Blue PRIVATE ${Python3_INCLUDE_DIRS})
-    set_property(TARGET BlueExposure PROPERTY INTERFACE_LINK_LIBRARIES "CcpCore")
+    target_link_libraries(Blue PRIVATE Python3::Python)
 endif()
 
 if(WIN32)
@@ -417,7 +420,7 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         separate_arguments(PYTHON_TESTS UNIX_COMMAND ${PYTHON_TESTS_STR})
         foreach(PYTHON_TEST ${PYTHON_TESTS})
             message(STATUS "Found test ${PYTHON_TEST}")
-            if(WIN32)
+            if(WIN32 OR LINUX)
                 set(CRASH_UPLOAD_ARG /nocrashreportupload)
             else()
                 set(CRASH_UPLOAD_ARG)
