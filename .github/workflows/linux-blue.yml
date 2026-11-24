@@ -24,7 +24,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential cmake ninja-build git curl pkg-config clang python3 locales
+            build-essential cmake ninja-build git curl pkg-config clang python3 locales \
+            autoconf autoconf-archive automake libtool
           sudo sed -i 's/^# \(fr_FR ISO-8859-1\)/\1/' /etc/locale.gen
           sudo locale-gen fr_FR
           gcc --version
