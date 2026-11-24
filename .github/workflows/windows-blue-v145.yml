@@ -141,7 +141,12 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: C:\vcpkg-binary-cache
-          key: blue-win-v145-${{ hashFiles('.github/workflows/windows-v145-pins.txt') }}
+          # The pin file fixes the v145 compiler, triplet, and the five overlaid
+          # source revisions. vcpkg-configuration.json selects every other
+          # port from the registry, including Crashpad. Both belong in the key.
+          # A new key still restores an older blue-win-v145- cache. Rebuilding
+          # the packages whose recipes changed is expected and is not a failure.
+          key: blue-win-v145-${{ hashFiles('.github/workflows/windows-v145-pins.txt', 'vcpkg-configuration.json') }}
           restore-keys: |
             blue-win-v145-
             windows-145-
@@ -186,6 +191,9 @@ jobs:
           Write-Output "VCPKG_BUILT=$built"
           Write-Output "VCPKG_DEFAULT_HOST_TRIPLET_LINES=$hostOnly"
           $cacheHit = "${{ steps.vcpkg-cache.outputs.cache-hit }}"
+          # cache-hit is true only for the primary key. A prefix restore is a
+          # partial hit: changed ports may rebuild, and compile or test
+          # failures below still fail the job.
           if ($cacheHit -eq "true" -and $built -ne 0) { throw "Exact cache hit rebuilt $built packages" }
           if ($cacheHit -eq "true" -and $restored -lt 1) { throw "Exact cache hit did not report a restored package count" }
           if ($configure -ne 0) { exit $configure }

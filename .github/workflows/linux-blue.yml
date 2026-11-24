@@ -1,0 +1,119 @@
+name: linux-blue
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-blue-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: linux-blue
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout this Blue head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install GCC, Clang, and the fr_FR locale
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential cmake ninja-build git curl pkg-config clang python3 locales
+          sudo sed -i 's/^# \(fr_FR ISO-8859-1\)/\1/' /etc/locale.gen
+          sudo locale-gen fr_FR
+          gcc --version
+          clang++ --version
+
+      - name: Fetch the pinned vcpkg tool and the committed registry triplet
+        run: |
+          set -euo pipefail
+          vcpkg_sha="$(awk -F= '/^vcpkg=/{print $2}' .github/workflows/windows-v145-pins.txt)"
+          baseline="$(python3 -c 'import json; print(json.load(open("vcpkg-configuration.json"))["registries"][0]["baseline"])')"
+          repository="$(python3 -c 'import json; print(json.load(open("vcpkg-configuration.json"))["registries"][0]["repository"])')"
+          git init /tmp/vcpkg
+          git -C /tmp/vcpkg remote add origin https://github.com/microsoft/vcpkg.git
+          git -C /tmp/vcpkg fetch --depth 1 origin "$vcpkg_sha"
+          git -C /tmp/vcpkg checkout --detach FETCH_HEAD
+          /tmp/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          git init /tmp/reg
+          git -C /tmp/reg remote add origin "$repository"
+          git -C /tmp/reg fetch --depth 1 origin "$baseline"
+          git -C /tmp/reg checkout --detach FETCH_HEAD
+          echo "VCPKG_SHA=$vcpkg_sha" >> "$GITHUB_ENV"
+          echo "REGISTRY_BASELINE=$baseline" >> "$GITHUB_ENV"
+          echo "Fetched vcpkg $vcpkg_sha and registry $baseline"
+
+      - name: Restore the Linux vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: /tmp/vcpkg-binary-cache
+          key: blue-linux-${{ hashFiles('vcpkg-configuration.json', '.github/workflows/windows-v145-pins.txt') }}
+          restore-keys: |
+            blue-linux-
+
+      - name: Configure and build from the committed registry
+        env:
+          PATH_TO_VCPKG_ROOT: /tmp/vcpkg
+          VCPKG_ROOT: /tmp/vcpkg
+          VCPKG_BINARY_SOURCES: clear;files,/tmp/vcpkg-binary-cache,readwrite
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_TOOLCHAIN_FILE=/tmp/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+            -DVCPKG_HOST_TRIPLET=x64-linux-release \
+            -DVCPKG_OVERLAY_TRIPLETS=/tmp/reg/triplets \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/tmp/reg/toolchains/x64-linux-carbon.cmake \
+            2>&1 | tee /tmp/configure.log
+          if grep -F "installing overlay port" /tmp/configure.log; then
+            echo "A port overlay was used. This job installs only committed registry ports."
+            exit 1
+          fi
+          cmake --build build
+
+      - name: Verify one shared Python runtime and the test suites
+        run: |
+          set -euo pipefail
+          prefix="$PWD/build/vcpkg_installed/x64-linux-release"
+          exe="$prefix/tools/carbon-exefile/exefile"
+          readelf -d "$exe" | grep 'libpython3.12.so.1.0'
+          readelf -d "$PWD/build/blue.so" | grep 'libpython3.12.so.1.0'
+          export LD_LIBRARY_PATH="$PWD/build:$prefix/lib"
+          export PYTHONPATH="$PWD/build:$prefix/lib:$prefix/bin:$prefix/bin/python:$prefix/lib/python3.12"
+          "$exe" /nocrashreportupload /buildflavor=release /py -c 'import blue, scheduler, _carbonsocket, sys
+          rows=set(line.split()[-1] for line in open("/proc/self/maps") if "libpython" in line)
+          print("BLUE_IMPORT_OK", sys.version)
+          print("LIBPYTHON_COUNT", len(rows))
+          print("\n".join(sorted(rows)))
+          if len(rows) != 1:
+              raise SystemExit(1)'
+          cd build
+          ctest --output-on-failure -R '^BlueCppUnitTestsOneProcess$'
+          cd ..
+          export PYTHON_PREFIX="$prefix"
+          export BLUE_BUILD_DIR="$PWD/build"
+          export EXEFILE="$PWD/build/exefile"
+          bash tests/python/import_failure_is_reported.sh
+          cd build
+          if ! grep -R "/nocrashreportupload" CTestTestfile.cmake >/dev/null; then
+            echo "Python tests do not disable crash uploads"
+            exit 1
+          fi
+          ctest --output-on-failure -R 'bluetests'
+
+      - name: Save the Linux vcpkg binary cache
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: /tmp/vcpkg-binary-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
