@@ -286,6 +286,13 @@ jobs:
           if (-not (Test-Path $harness)) { Write-Output "CPP_HARNESS_MISSING"; exit 1 }
           Write-Output "CPP_HARNESS $harness"
           Set-Location (Split-Path $harness)
+          # The suite finalizes Python after every test. Run the failing case
+          # first, in its own process, so a heap corruption can be attributed
+          # either to that case or to the next initialization.
+          Write-Output "CPP_ISOLATED_BEGIN"
+          & $harness --gtest_color=no --gtest_filter=BlueResManTest.CallLoadObjectWithGil
+          Write-Output "CPP_ISOLATED_GIL_EXIT=$LASTEXITCODE"
+          Write-Output "CPP_SUITE_BEGIN"
           & $harness --gtest_color=no
           $tests = $LASTEXITCODE
           Write-Output "CPP_HARNESS_EXIT=$tests"
