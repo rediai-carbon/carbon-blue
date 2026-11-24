@@ -56,3 +56,11 @@ gtest_discover_tests(BlueCppUnitTests
             ENVIRONMENT "BUILDFLAVOR=$<LOWER_CASE:$<CONFIG>>"
         WORKING_DIRECTORY $<TARGET_FILE_DIR:BlueCppUnitTests>
 )
+
+# gtest_discover_tests runs each case in its own process. This runs the same
+# binary once so a second Python initialization cannot hide inside CTest.
+add_test(NAME BlueCppUnitTestsOneProcess COMMAND BlueCppUnitTests)
+set_tests_properties(BlueCppUnitTestsOneProcess PROPERTIES
+    ENVIRONMENT "RES_PATH=${CMAKE_CURRENT_SOURCE_DIR}/res;PYTHON_STDLIB=${Python3_STDLIB};IMPORT_PATH=${VCPKG_IMPORT_PREFIX};BUILDFLAVOR=$<LOWER_CASE:$<CONFIG>>"
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:BlueCppUnitTests>
+)
