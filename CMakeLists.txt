@@ -368,13 +368,29 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         else()
             set(EXEFILE_TOOL_NAME exefile)
         endif()
-        find_program(exefile_tool ${EXEFILE_TOOL_NAME} NO_CACHE)
+        set(exefile_tool "")
+        foreach(triplet IN ITEMS "${VCPKG_TARGET_TRIPLET}" "${VCPKG_HOST_TRIPLET}" "x64-windows-145-release" "x64-windows")
+            if(exefile_tool)
+                break()
+            endif()
+            foreach(exefile_name IN ITEMS "exefile.exe" "exefile")
+                set(exefile_candidate "${VCPKG_INSTALLED_DIR}/${triplet}/tools/carbon-exefile/${exefile_name}")
+                if(EXISTS "${exefile_candidate}")
+                    set(exefile_tool "${exefile_candidate}")
+                    break()
+                endif()
+            endforeach()
+        endforeach()
+        if(NOT exefile_tool)
+            message(FATAL_ERROR "exefile was not installed under ${VCPKG_INSTALLED_DIR} (target=${VCPKG_TARGET_TRIPLET}, host=${VCPKG_HOST_TRIPLET})")
+        endif()
+        message(STATUS "Using exefile ${exefile_tool}")
 
         if (WIN32)
             add_custom_command(TARGET Blue POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy ${exefile_tool} $<TARGET_FILE_DIR:Blue>
             )
-            set(exefile_tool $<TARGET_FILE_DIR:Blue>/${EXEFILE_TOOL_NAME})
+            set(exefile_tool "$<TARGET_FILE_DIR:Blue>/${EXEFILE_TOOL_NAME}.exe")
             if (WIN32)
                 add_custom_command(
                         TARGET Blue POST_BUILD
@@ -393,15 +409,25 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
             set(TESTS_WORKING_DIRECTORY $<TARGET_FILE_DIR:Blue>)
         endif()
 
+        if(WIN32)
+            # Exefile is not python.exe, so the embedded interpreter does not
+            # find Lib beside the vcpkg prefix unless PYTHONHOME is set.
+            get_filename_component(BLUE_PYTHONHOME "${Python3_STDLIB}" DIRECTORY)
+        endif()
         separate_arguments(PYTHON_TESTS UNIX_COMMAND ${PYTHON_TESTS_STR})
         foreach(PYTHON_TEST ${PYTHON_TESTS})
             message(STATUS "Found test ${PYTHON_TEST}")
+            if(WIN32)
+                set(CRASH_UPLOAD_ARG /nocrashreportupload)
+            else()
+                set(CRASH_UPLOAD_ARG)
+            endif()
             add_test(NAME ${PYTHON_TEST}
-                COMMAND ${exefile_tool} /inherit /buildflavor=$<LOWER_CASE:$<CONFIG>> /py -m bluetests -v ${PYTHON_TEST}
+                COMMAND ${exefile_tool} ${CRASH_UPLOAD_ARG} /inherit /buildflavor=$<LOWER_CASE:$<CONFIG>> /py -m bluetests -v ${PYTHON_TEST}
                 WORKING_DIRECTORY ${TESTS_WORKING_DIRECTORY}
             )
             if(WIN32)
-                set_tests_properties(${PYTHON_TEST} PROPERTIES ENVIRONMENT  "PYTHONPATH=$<TARGET_FILE_DIR:Blue>\;${CMAKE_CURRENT_SOURCE_DIR}/python\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/python\;${Python3_STDLIB};BUILDFLAVOR=$<LOWER_CASE:$<CONFIG>>")
+                set_tests_properties(${PYTHON_TEST} PROPERTIES ENVIRONMENT  "PYTHONHOME=${BLUE_PYTHONHOME};PYTHONPATH=$<TARGET_FILE_DIR:Blue>\;${CMAKE_CURRENT_SOURCE_DIR}/python\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib\;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/python\;${Python3_STDLIB};BUILDFLAVOR=$<LOWER_CASE:$<CONFIG>>")
             elseif (APPLE)
                  set_tests_properties(${PYTHON_TEST} PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/tests/python:$<TARGET_FILE_DIR:Blue>:${CMAKE_CURRENT_SOURCE_DIR}/python:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/python3.12/lib-dynload:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/python:${Python3_STDLIB};BUILDFLAVOR=$<LOWER_CASE:$<CONFIG>>")
             elseif (LINUX)

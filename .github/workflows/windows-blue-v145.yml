@@ -1,0 +1,462 @@
+name: windows-blue-v145
+
+on:
+  pull_request:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  build:
+    name: windows-blue-v145
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout this Blue head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Preflight the runtime scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          New-Item -ItemType Directory -Force -Path C:\b | Out-Null
+          Set-Content -Path C:\b\argv.py -Encoding ascii -Value "import sys`r`nprint('PY_ARGV_COUNT', len(sys.argv))`r`nfor index, arg in enumerate(sys.argv):`r`n    print('PY_ARGV', index, arg)`r`n"
+          Set-Content -Path C:\b\missing_module.py -Encoding ascii -Value "import fenris_missing_module`r`n"
+          Set-Content -Path C:\b\runtime_ok.py -Encoding ascii -Value "import blue, scheduler, _carbonsocket`r`nprint('WIN_RUNTIME_OK')`r`n"
+          $python = (Get-Command python).Source
+          & $python C:\b\missing_module.py > C:\b\preflight-missing.txt 2>&1
+          $fail = $LASTEXITCODE
+          Get-Content C:\b\preflight-missing.txt
+          Write-Output "PREFLIGHT_MISSING_EXIT=$fail"
+          if ($fail -eq 0 -or $fail -ge 128) { exit 1 }
+          $reported = Select-String -Path C:\b\preflight-missing.txt -Pattern "ModuleNotFoundError"
+          if (-not $reported) { Write-Output "PREFLIGHT_MISSING_UNREPORTED"; exit 1 }
+          & $python C:\b\argv.py > C:\b\preflight-argv.txt 2>&1
+          if ($LASTEXITCODE -ne 0) { Get-Content C:\b\preflight-argv.txt; exit $LASTEXITCODE }
+          $argv = Get-Content C:\b\preflight-argv.txt -Raw
+          if ($argv -notmatch "missing_module.py" -and $argv -notmatch "argv.py") { Write-Output $argv; Write-Output "PREFLIGHT_ARGV_UNREPORTED"; exit 1 }
+          Write-Output "RUNTIME_SCRIPT_PREFLIGHT_OK"
+
+      - name: Confirm the v145 toolset and its ATL header
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $default = Get-ChildItem "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion.v145.default.txt" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $default) {
+            Write-Output "V145_DEFAULT_FILE_MISSING"
+            Get-ChildItem "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion*.txt" | ForEach-Object { Write-Output $_.Name; Get-Content $_.FullName }
+            exit 1
+          }
+          $ver = (Get-Content $default.FullName -Raw).Trim()
+          Write-Output "V145_COMPILER=$ver"
+          $atl = Join-Path $vs "VC\Tools\MSVC\$ver\atlmfc\include\atlbase.h"
+          if (-not (Test-Path $atl)) { Write-Output "V145_ATL_MISSING $atl"; exit 1 }
+          Write-Output "V145_ATL=$atl"
+
+      - name: Fetch the pinned registry and bootstrap vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pin = @{}
+          Get-Content "$env:GITHUB_WORKSPACE\.github\workflows\windows-v145-pins.txt" | ForEach-Object {
+            $line = $_.Trim()
+            if (-not $line -or $line.StartsWith("#")) { return }
+            $parts = $line.Split("=", 2)
+            $pin[$parts[0].Trim()] = $parts[1].Trim()
+          }
+          foreach ($required in @("vcpkg", "registry", "host_portfile", "triplet", "toolset", "carbon-core", "carbon-scheduler", "carbon-io", "carbon-exefile", "carbon-blueexposure")) {
+            if (-not $pin.ContainsKey($required) -or -not $pin[$required]) { throw "Missing pin $required" }
+          }
+          Write-Output "PINNED_VCPKG $($pin.vcpkg)"
+          Write-Output "PINNED_REGISTRY $($pin.registry)"
+          Write-Output "PINNED_TRIPLET $($pin.triplet)"
+          git init C:\reg
+          git -C C:\reg remote add origin https://github.com/rediai-carbon/carbon-vcpkg-registry.git
+          git -C C:\reg fetch --depth 1 origin $pin.registry
+          git -C C:\reg checkout --detach FETCH_HEAD
+          git init C:\vcpkg
+          git -C C:\vcpkg remote add origin https://github.com/microsoft/vcpkg.git
+          git -C C:\vcpkg fetch --depth 1 origin $pin.vcpkg
+          git -C C:\vcpkg checkout --detach FETCH_HEAD
+          cmd /c C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path C:\overlay | Out-Null
+          Get-ChildItem C:\reg\ports -Directory | ForEach-Object {
+            $portfile = Join-Path $_.FullName "portfile.cmake"
+            if ((Test-Path $portfile) -and (Select-String -Path $portfile -Pattern "git@github.com:" -Quiet)) {
+              Copy-Item $_.FullName (Join-Path C:\overlay $_.Name) -Recurse
+            }
+          }
+          Get-ChildItem C:\overlay -Recurse -Filter portfile.cmake | ForEach-Object {
+            $text = [System.IO.File]::ReadAllText($_.FullName)
+            $text = $text.Replace("git@github.com:", "https://github.com/")
+            [System.IO.File]::WriteAllText($_.FullName, $text)
+          }
+          $pins = @{
+            "carbon-core" = @("https://github.com/rediai-carbon/carbon-core.git", $pin["carbon-core"])
+            "carbon-scheduler" = @("https://github.com/rediai-carbon/carbon-scheduler.git", $pin["carbon-scheduler"])
+            "carbon-io" = @("https://github.com/rediai-carbon/carbon-io.git", $pin["carbon-io"])
+            "carbon-exefile" = @("https://github.com/rediai-carbon/carbon-exefile.git", $pin["carbon-exefile"])
+            "carbon-blueexposure" = @("https://github.com/rediai-carbon/carbon-blueexposure.git", $pin["carbon-blueexposure"])
+          }
+          foreach ($name in $pins.Keys) {
+            $dest = Join-Path C:\overlay $name
+            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+            Copy-Item (Join-Path C:\reg\ports $name) $dest -Recurse
+            $portfile = Join-Path $dest "portfile.cmake"
+            if ($name -eq "carbon-core" -or $name -eq "carbon-exefile") {
+              $fixed = "https://raw.githubusercontent.com/rediai-carbon/carbon-vcpkg-registry/$($pin.host_portfile)/ports/$name/portfile.cmake"
+              Invoke-WebRequest -Uri $fixed -OutFile $portfile
+              Write-Output "HOST_BUILD_TYPE_PORTFILE $name $($pin.host_portfile)"
+            }
+            $text = [System.IO.File]::ReadAllText($portfile)
+            $text = $text.Replace("git@github.com:", "https://github.com/")
+            $text = [regex]::Replace($text, "URL\s+\S+", ("URL " + $pins[$name][0]), 1)
+            $text = [regex]::Replace($text, "REF\s+\S+", ("REF " + $pins[$name][1]), 1)
+            [System.IO.File]::WriteAllText($portfile, $text)
+            Write-Output ("PINNED_SOURCE " + $name + " " + $pins[$name][1])
+          }
+          $ports = @(Get-ChildItem C:\overlay -Directory | ForEach-Object { $_.FullName.Replace("\", "/") })
+          $joined = $ports -join ";"
+          # Exefile is a host dependency. Using the default x64-windows host
+          # triplet rebuilds python, Tracy, protobuf and OpenSSL in debug and
+          # release. The runner is x64, so the v145 release triplet can be both.
+          $pre = @(
+            ('set(VCPKG_TARGET_TRIPLET "{0}" CACHE STRING "")' -f $pin.triplet),
+            ('set(VCPKG_HOST_TRIPLET "{0}" CACHE STRING "")' -f $pin.triplet),
+            'set(VCPKG_OVERLAY_TRIPLETS "C:/reg/triplets" CACHE STRING "")',
+            ('set(VCPKG_OVERLAY_PORTS "{0}" CACHE STRING "")' -f $joined),
+            'set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")'
+          )
+          New-Item -ItemType Directory -Force -Path C:\b | Out-Null
+          $pre | Set-Content -Path C:\b\pre.cmake -Encoding ascii
+          Write-Output "OVERLAY_PORTS=$joined"
+
+      - name: Restore the vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: blue-win-v145-${{ hashFiles('.github/workflows/windows-v145-pins.txt') }}
+          restore-keys: |
+            blue-win-v145-
+            windows-145-
+
+      - name: Enter the v145 toolset for the outer build
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+          toolset: 14.52
+
+      - name: Configure and build Blue
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
+          New-Item -ItemType Directory -Force -Path C:\vcpkg-binary-cache | Out-Null
+          $env:VCPKG_BINARY_SOURCES = "clear;files,C:/vcpkg-binary-cache,readwrite"
+          $cl = (Get-Command cl.exe).Source
+          Write-Output "OUTER_CL=$cl"
+          Write-Output "VCPKG_CACHE_HIT=${{ steps.vcpkg-cache.outputs.cache-hit }}"
+          Write-Output "VCPKG_CACHE_PRIMARY=${{ steps.vcpkg-cache.outputs.cache-primary-key }}"
+          Write-Output "VCPKG_CACHE_MATCHED=${{ steps.vcpkg-cache.outputs.cache-matched-key }}"
+          if ($cl -notmatch "\\14\.52\.") { throw "Outer compiler is not the v145 14.52 toolset: $cl" }
+          cmake -S $env:GITHUB_WORKSPACE -B C:\b\blue -G Ninja -C C:\b\pre.cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=$cl" "-DCMAKE_CXX_COMPILER=$cl" -DVCPKG_INSTALLED_DIR=C:\b\installed -DBUILD_TESTING=ON *>&1 | Tee-Object -FilePath C:\b\configure.log
+          $configure = $LASTEXITCODE
+          $log = @(Get-Content C:\b\configure.log)
+          # vcpkg logs one summary, "Restored N package(s) from <cache>".
+          # Matching "Restored .+ from" counts that summary once, not N.
+          $summary = @($log | Where-Object { $_ -match "Restored (\d+) package\(s\)" })
+          if ($summary.Count -gt 0 -and $summary[-1] -match "Restored (\d+) package\(s\)") {
+            $restored = [int]$Matches[1]
+          } else {
+            $restored = @($log | Where-Object { $_ -match "^Restored .+ from " }).Count
+          }
+          $handled = @($log | Where-Object { $_ -match "Elapsed time to handle .+:" }).Count
+          $built = @($log | Where-Object { $_ -match "Building [^:]+:" }).Count
+          $hostOnly = @($log | Where-Object { $_ -match ":x64-windows:" }).Count
+          Write-Output "VCPKG_RESTORE_SUMMARY $($summary[-1])"
+          Write-Output "VCPKG_RESTORED=$restored"
+          Write-Output "VCPKG_HANDLED=$handled"
+          Write-Output "VCPKG_BUILT=$built"
+          Write-Output "VCPKG_DEFAULT_HOST_TRIPLET_LINES=$hostOnly"
+          $cacheHit = "${{ steps.vcpkg-cache.outputs.cache-hit }}"
+          if ($cacheHit -eq "true" -and $built -ne 0) { throw "Exact cache hit rebuilt $built packages" }
+          if ($cacheHit -eq "true" -and $restored -lt 1) { throw "Exact cache hit did not report a restored package count" }
+          if ($configure -ne 0) { exit $configure }
+          $compilers = Select-String -Path C:\b\blue\CMakeCache.txt -Pattern "^CMAKE_C_COMPILER:|^CMAKE_CXX_COMPILER:"
+          $compilers | ForEach-Object { Write-Output $_.Line }
+          $joined = ($compilers | ForEach-Object { $_.Line }) -join "`n"
+          if ($joined -match "mingw") { throw "Outer build selected MinGW" }
+          if ($joined -notmatch "14\.52") { throw "Outer build did not record the v145 compiler" }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build C:\b\blue --target Blue
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $built = Get-ChildItem C:\b\blue -Recurse -Include blue.dll,blue.pyd,blue.lib | Select-Object -ExpandProperty FullName
+          Write-Output "BLUE_ARTIFACTS"
+          $built
+          if (-not $built) { Write-Output "BLUE_ARTIFACT_MISSING"; exit 1 }
+          if (Test-Path C:\b\installed\vcpkg\status) {
+            Select-String -Path C:\b\installed\vcpkg\status -Pattern "^Package: |^Version: " | ForEach-Object { $_.Line }
+          }
+          Get-ChildItem C:\b\installed -Recurse -Include exefile.exe,python.exe,python3*.dll,blue.dll,blue.pyd -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+
+      - name: Record packaged vcpkg binaries
+        id: vcpkg-packages
+        if: always()
+        shell: pwsh
+        run: |
+          $zips = @(Get-ChildItem C:\vcpkg-binary-cache -Recurse -Filter *.zip -ErrorAction SilentlyContinue)
+          Write-Output "VCPKG_CACHE_ZIP_COUNT=$($zips.Count)"
+          $produced = if ($zips.Count -gt 0) { "true" } else { "false" }
+          "produced=$produced" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+
+      - name: Save the vcpkg binary cache
+        if: always() && steps.vcpkg-packages.outputs.produced == 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+
+      - name: Exercise the Windows host runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $triplet = "C:\b\installed\x64-windows-145-release"
+          $exe = Get-ChildItem C:\b\blue -Recurse -Filter exefile.exe | Select-Object -First 1
+          if (-not $exe) { Write-Output "EXEFILE_MISSING"; exit 1 }
+          $python = Get-ChildItem $triplet -Recurse -Filter python.exe | Select-Object -First 1
+          if (-not $python) { Write-Output "PYTHON_MISSING"; exit 1 }
+          $version = & $python.FullName -c "import sys; print(sys.version)"
+          Write-Output "PYTHON $version"
+          Write-Output "EXEFILE $($exe.FullName)"
+          $pin = @{}
+          Get-Content "$env:GITHUB_WORKSPACE\.github\workflows\windows-v145-pins.txt" | ForEach-Object {
+            $line = $_.Trim()
+            if (-not $line -or $line.StartsWith("#")) { return }
+            $parts = $line.Split("=", 2)
+            $pin[$parts[0].Trim()] = $parts[1].Trim()
+          }
+          $header = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rediai-carbon/carbon-exefile/$($pin['carbon-exefile'])/CommandArguments.h").Content
+          if ($header -notmatch "uploadMinidump\( true \)") { throw "Pinned exefile no longer enables Windows crash upload by default" }
+          Write-Output "CRASH_UPLOAD_DEFAULT=windows-on"
+          Write-Output "CRASH_UPLOAD_TEST_FLAG=/nocrashreportupload"
+          Write-Output "CRASH_UPLOAD_SOURCE=$($pin['carbon-exefile'])"
+          $stdlib = (& $python.FullName -c "import sysconfig; print(sysconfig.get_path('stdlib'))").Trim()
+          Write-Output "PYTHON_STDLIB $stdlib"
+          $env:BUILDFLAVOR = "release"
+          $env:PYTHONHOME = Split-Path $stdlib -Parent
+          $env:PYTHONPATH = "$($exe.DirectoryName);${env:GITHUB_WORKSPACE}\python;$triplet\bin;$triplet\lib;$triplet\bin\python;$stdlib"
+          Write-Output "PYTHONHOME $env:PYTHONHOME"
+          # Start-Process waits and returns the process exit code. The call
+          # operator's redirection reported exit 0 and captured no output for
+          # this executable. Script paths have no spaces, so argument joining
+          # cannot split the Python program.
+          function Invoke-BluePython([string]$Script, [string]$Out, [string]$Err) {
+            $proc = Start-Process -FilePath $exe.FullName -ArgumentList @(
+              "/nocrashreportupload", "/inherit", "/buildflavor=release", "/py", $Script
+            ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $Out -RedirectStandardError $Err
+            Get-Content $Out, $Err -ErrorAction SilentlyContinue | Write-Host
+            return $proc.ExitCode
+          }
+          $argvExit = Invoke-BluePython "C:\b\argv.py" "C:\b\argv.txt" "C:\b\argv.err"
+          Write-Output "ARGV_EXIT=$argvExit"
+          if ($argvExit -ne 0) { exit $argvExit }
+          $argv = Get-Content C:\b\argv.txt, C:\b\argv.err -Raw
+          if ($argv -notmatch "argv.py") { Write-Output "ARGV_SCRIPT_NOT_FORWARDED"; exit 1 }
+          $fail = Invoke-BluePython "C:\b\missing_module.py" "C:\b\init-fail.txt" "C:\b\init-fail.err"
+          Write-Output "INIT_FAILURE_EXIT=$fail"
+          if ($fail -eq 0 -or $fail -ge 128) { exit 1 }
+          $reported = Select-String -Path C:\b\init-fail.txt, C:\b\init-fail.err -Pattern "ModuleNotFoundError"
+          if (-not $reported) { Write-Output "INIT_FAILURE_UNREPORTED"; exit 1 }
+          $ok = Invoke-BluePython "C:\b\runtime_ok.py" "C:\b\runtime.txt" "C:\b\runtime.err"
+          Write-Output "WIN_RUNTIME_EXIT=$ok"
+          if ($ok -ne 0) { exit $ok }
+
+      - name: Run the discovered Python runtime tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
+          Set-Location C:\b\blue
+          ctest --output-on-failure --timeout 180 -j 2 -E "BlueCppUnitTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run the C++ harness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $env:PATH_TO_VCPKG_ROOT = "C:\vcpkg"
+          cmake --build C:\b\blue --target BlueCppUnitTests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $triplet = "C:\b\installed\x64-windows-145-release"
+          $python = Get-ChildItem $triplet -Recurse -Filter python.exe | Select-Object -First 1
+          if (-not $python) { Write-Output "PYTHON_MISSING"; exit 1 }
+          $stdlib = (& $python.FullName -c "import sysconfig; print(sysconfig.get_path('stdlib'))").Trim()
+          $env:PYTHON_STDLIB = $stdlib
+          $env:PYTHONHOME = Split-Path $stdlib -Parent
+          $env:IMPORT_PATH = $triplet
+          $env:RES_PATH = "$env:GITHUB_WORKSPACE\tests\cpp\res"
+          $env:BUILDFLAVOR = "release"
+          $harness = "C:\b\blue\tests\cpp\BlueCppUnitTests.exe"
+          if (-not (Test-Path $harness)) { Write-Output "CPP_HARNESS_MISSING"; exit 1 }
+          Write-Output "CPP_HARNESS $harness"
+          Set-Location (Split-Path $harness)
+          # The resource suite keeps one interpreter. The isolated process
+          # remains so a single-case failure is visible before the suite.
+          Write-Output "CPP_ISOLATED_BEGIN"
+          & $harness --gtest_color=no --gtest_filter=BlueResManTest.CallLoadObjectWithGil
+          Write-Output "CPP_ISOLATED_GIL_EXIT=$LASTEXITCODE"
+          Write-Output "CPP_SUITE_BEGIN"
+          & $harness --gtest_color=no
+          $tests = $LASTEXITCODE
+          Write-Output "CPP_HARNESS_EXIT=$tests"
+          if ($tests -ne 0) { exit $tests }
+
+      - name: Build and execute d3dinfo and ime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          cmake --install C:\b\blue --prefix C:\b\blue-prefix
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The shipped config files include their export before finding
+          # dependencies. Load the dependencies first so the consumer links
+          # the installed targets instead of searching for another runtime.
+          function Write-DependencyFirstConfig([string]$Path, [string]$Dependencies, [string]$ExportFile) {
+            @(
+              "include(CMakeFindDependencyMacro)"
+              $Dependencies
+              "include(`"`${CMAKE_CURRENT_LIST_DIR}/$ExportFile`")"
+            ) | Set-Content -Path $Path -Encoding ascii
+          }
+          Write-DependencyFirstConfig "C:\b\blue-prefix\share\carbon-blue\carbon-blueConfig.cmake" "find_dependency(carbon-core CONFIG REQUIRED)`r`nfind_dependency(carbon-blueexposure CONFIG REQUIRED)" "carbon-blue.cmake"
+          Write-DependencyFirstConfig "C:\b\installed\x64-windows-145-release\share\carbon-blueexposure\carbon-blueexposureConfig.cmake" "find_dependency(carbon-core CONFIG REQUIRED)`r`nfind_dependency(Python3 COMPONENTS Development REQUIRED)" "carbon-blueexposure.cmake"
+          $cl = (Get-Command cl.exe).Source
+          if ($cl -notmatch "\\14\.52\.") { throw "Consumer compiler is not the v145 14.52 toolset: $cl" }
+          function Build-Consumer([string]$Name, [string]$Url, [string]$Sha, [string]$Target) {
+            $src = "C:\src\$Name"
+            git init $src
+            git -C $src remote add origin $Url
+            git -C $src fetch --depth 1 origin $Sha
+            if ($LASTEXITCODE -ne 0) { throw "Could not fetch $Name $Sha" }
+            git -C $src checkout --detach FETCH_HEAD
+            if ($LASTEXITCODE -ne 0) { throw "Could not check out $Name $Sha" }
+            $head = (git -C $src rev-parse HEAD).Trim()
+            if ($head -ne $Sha) { throw "$Name checked out $head, expected $Sha" }
+            Write-Output "CONSUMER_SOURCE $Name $head"
+            cmake -S $src -B "C:\b\$Name" -G Ninja -DCMAKE_BUILD_TYPE=Release -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_TARGET_TRIPLET=x64-windows-145-release -DVCPKG_HOST_TRIPLET=x64-windows-145-release -DVCPKG_INSTALLED_DIR=C:/b/installed -DVCPKG_OVERLAY_TRIPLETS=C:/reg/triplets "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DCMAKE_PREFIX_PATH=C:/b/blue-prefix;C:/b/installed/x64-windows-145-release" "-DCMAKE_C_COMPILER=$cl" "-DCMAKE_CXX_COMPILER=$cl"
+            if ($LASTEXITCODE -ne 0) { throw "Configure failed for $Name" }
+            cmake --build "C:\b\$Name" --target $Target
+            if ($LASTEXITCODE -ne 0) { throw "Build failed for $Name" }
+          }
+          Build-Consumer "carbon-d3dinfo" "https://github.com/rediai-carbon/carbon-d3dinfo.git" "4728fab6ea27b1c0997dfabeb7c67d5f992d484a" "d3dinfo"
+          Build-Consumer "carbon-ime" "https://github.com/rediai-carbon/carbon-ime.git" "d21ed5a81f6ac8a8c5252aadcbdd92c9dfc30795" "Ime"
+          $ext = "C:\b\extensions"
+          New-Item -ItemType Directory -Force -Path $ext | Out-Null
+          foreach ($built in @(
+            @{ Filter = "_d3dinfo.pyd"; Fallback = "_d3dinfo.dll"; Dest = "_d3dinfo.pyd" },
+            @{ Filter = "_ime.pyd"; Fallback = "_ime.dll"; Dest = "_ime.pyd" }
+          )) {
+            $file = Get-ChildItem "C:\b" -Recurse -Filter $built.Filter -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $file) {
+              $file = Get-ChildItem "C:\b" -Recurse -Filter $built.Fallback -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if (-not $file) { throw "Missing extension $($built.Dest)" }
+            Copy-Item $file.FullName (Join-Path $ext $built.Dest) -Force
+            Write-Output "EXTENSION $($built.Dest) $($file.FullName)"
+          }
+          $triplet = "C:\b\installed\x64-windows-145-release"
+          $exe = Get-ChildItem C:\b\blue -Recurse -Filter exefile.exe | Select-Object -First 1
+          $python = Get-ChildItem $triplet -Recurse -Filter python.exe | Select-Object -First 1
+          $stdlib = (& $python.FullName -c "import sysconfig; print(sysconfig.get_path('stdlib'))").Trim()
+          $expected = (& $python.FullName -c "import sys; print(sys.version)").Trim()
+          $env:BUILDFLAVOR = "release"
+          $env:PYTHONHOME = Split-Path $stdlib -Parent
+          $env:PYTHONPATH = "$ext;$($exe.DirectoryName);${env:GITHUB_WORKSPACE}\python;$triplet\bin;$triplet\lib;$triplet\bin\python;$stdlib"
+          $d3dScript = @(
+            "import sys"
+            "print('D3DINFO_PYTHON', sys.version)"
+            "import blue"
+            "ext = blue.LoadExtension('_d3dinfo')"
+            "d3d = ext.D3D11Info()"
+            "d3d.InitializeD3D()"
+            "count = d3d.GetAdapterCount()"
+            "print('D3D11_ADAPTER_COUNT', count)"
+            "for index in range(count):"
+            "    info = d3d.GetAdapterInfo(index)"
+            "    print('D3D11_ADAPTER', index, info.description, info.vendorID, info.deviceID)"
+            "d3d.ShutdownD3D()"
+            "d12 = ext.D3D12Info()"
+            "d12.InitializeD3D()"
+            "count12 = d12.GetAdapterCount()"
+            "print('D3D12_ADAPTER_COUNT', count12)"
+            "for index in range(count12):"
+            "    info = d12.GetAdapterInfo(index)"
+            "    print('D3D12_ADAPTER', index, info.description, info.vendorID, info.deviceID)"
+            "d12.ShutdownD3D()"
+            "print('D3DINFO_EXECUTED')"
+          ) -join "`n"
+          Set-Content -Path C:\b\d3dinfo_run.py -Encoding ascii -Value $d3dScript
+          $imeScript = @(
+            "import sys"
+            "print('IME_PYTHON', sys.version)"
+            "import blue"
+            "ext = blue.LoadExtension('_ime')"
+            "ime = ext.Ime()"
+            "layout = ime.GetKeyboardLayout()"
+            "print('IME_KEYBOARD_LAYOUT', layout)"
+            "if not layout:"
+            "    raise SystemExit('GetKeyboardLayout returned an empty layout')"
+            "print('IME_EXECUTED')"
+          ) -join "`n"
+          Set-Content -Path C:\b\ime_run.py -Encoding ascii -Value $imeScript
+          function Invoke-BluePython([string]$Script, [string]$Out, [string]$Err) {
+            $proc = Start-Process -FilePath $exe.FullName -ArgumentList @(
+              "/nocrashreportupload", "/inherit", "/buildflavor=release", "/py", $Script
+            ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $Out -RedirectStandardError $Err
+            Get-Content $Out, $Err -ErrorAction SilentlyContinue | Write-Host
+            return $proc.ExitCode
+          }
+          $d3d = Invoke-BluePython "C:\b\d3dinfo_run.py" "C:\b\d3dinfo.txt" "C:\b\d3dinfo.err"
+          Write-Output "D3DINFO_EXIT=$d3d"
+          if ($d3d -ne 0) { exit $d3d }
+          $d3dOut = Get-Content C:\b\d3dinfo.txt, C:\b\d3dinfo.err -Raw
+          if ($d3dOut -notmatch "D3DINFO_EXECUTED") { throw "d3dinfo did not complete adapter enumeration" }
+          if ($d3dOut -notmatch [regex]::Escape($expected)) { throw "d3dinfo did not use the verified Python $expected" }
+          $ime = Invoke-BluePython "C:\b\ime_run.py" "C:\b\ime.txt" "C:\b\ime.err"
+          Write-Output "IME_EXIT=$ime"
+          if ($ime -ne 0) { exit $ime }
+          $imeOut = Get-Content C:\b\ime.txt, C:\b\ime.err -Raw
+          if ($imeOut -notmatch "IME_EXECUTED") { throw "ime did not report a keyboard layout" }
+          if ($imeOut -notmatch [regex]::Escape($expected)) { throw "ime did not use the verified Python $expected" }
+
+      - name: Upload runtime diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-blue-runtime-logs
+          path: |
+            C:\b\preflight-missing.txt
+            C:\b\argv.txt
+            C:\b\argv.err
+            C:\b\init-fail.txt
+            C:\b\init-fail.err
+            C:\b\runtime.txt
+            C:\b\runtime.err
+            C:\b\d3dinfo.txt
+            C:\b\d3dinfo.err
+            C:\b\ime.txt
+            C:\b\ime.err
+            C:\b\configure.log
+            C:\b\blue\Testing\Temporary\LastTest.log
+          if-no-files-found: warn

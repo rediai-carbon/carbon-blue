@@ -1,0 +1,12 @@
+# Inputs that change the Windows v145 binary cache.
+# The workflow reads this file. Do not duplicate these revisions in the workflow script.
+vcpkg=3cb3f66bb768e04b8af95737adaaec3b4a583842
+registry=3548d22bf31e2c0359e447aaa9ef19821b6fae01
+host_portfile=fcd2296bf8b37385e639c642be2375d0f5077941
+triplet=x64-windows-145-release
+toolset=14.52
+carbon-core=beffc4ee091358ea755f5dcb553c60f43e278768
+carbon-scheduler=7a4070383f783b9d0d6f436ad8b6e2c2adef6230
+carbon-io=e7ebe5f2636f570a1eedc3a50930fd2a348279ac
+carbon-exefile=bf2c480d6433dce8a7b274a2b5b3f431f9ce76aa
+carbon-blueexposure=5710645741adf743b06940c280c117df6e1fd10e

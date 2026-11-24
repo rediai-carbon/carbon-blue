@@ -9,7 +9,9 @@
 class BlueResManTest : public ::testing::Test
 {
 protected:
-	void SetUp() override
+	// Python cannot be finalized and initialized again after Blue and its
+	// extension modules have started. The suite keeps one interpreter.
+	static void SetUpTestSuite()
 	{
 		PyPreConfig preConfig;
 		PyPreConfig_InitIsolatedConfig( &preConfig );
@@ -130,14 +132,14 @@ protected:
 		std::vector<std::wstring> searchPaths;
 		searchPaths.push_back( resPath );
 		BlueSetSearchPaths( searchPaths );
-
-		::testing::Test::SetUp();
 	}
 
-	void TearDown() override
+	static void TearDownTestSuite()
 	{
-		Py_FinalizeEx();
-		::testing::Test::TearDown();
+		if( Py_IsInitialized() )
+		{
+			Py_FinalizeEx();
+		}
 	}
 };
 
