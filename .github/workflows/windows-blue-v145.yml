@@ -329,6 +329,18 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           cmake --install C:\b\blue --prefix C:\b\blue-prefix
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The shipped config files include their export before finding
+          # dependencies. Load the dependencies first so the consumer links
+          # the installed targets instead of searching for another runtime.
+          function Write-DependencyFirstConfig([string]$Path, [string]$Dependencies, [string]$ExportFile) {
+            @(
+              "include(CMakeFindDependencyMacro)"
+              $Dependencies
+              "include(`"`${CMAKE_CURRENT_LIST_DIR}/$ExportFile`")"
+            ) | Set-Content -Path $Path -Encoding ascii
+          }
+          Write-DependencyFirstConfig "C:\b\blue-prefix\share\carbon-blue\carbon-blueConfig.cmake" "find_dependency(carbon-core CONFIG REQUIRED)`r`nfind_dependency(carbon-blueexposure CONFIG REQUIRED)" "carbon-blue.cmake"
+          Write-DependencyFirstConfig "C:\b\installed\x64-windows-145-release\share\carbon-blueexposure\carbon-blueexposureConfig.cmake" "find_dependency(carbon-core CONFIG REQUIRED)`r`nfind_dependency(Python3 COMPONENTS Development REQUIRED)" "carbon-blueexposure.cmake"
           $cl = (Get-Command cl.exe).Source
           if ($cl -notmatch "\\14\.52\.") { throw "Consumer compiler is not the v145 14.52 toolset: $cl" }
           function Build-Consumer([string]$Name, [string]$Url, [string]$Sha, [string]$Target) {
@@ -342,7 +354,7 @@ jobs:
             $head = (git -C $src rev-parse HEAD).Trim()
             if ($head -ne $Sha) { throw "$Name checked out $head, expected $Sha" }
             Write-Output "CONSUMER_SOURCE $Name $head"
-            cmake -S $src -B "C:\b\$Name" -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=C:/b/blue-prefix;C:/b/installed/x64-windows-145-release" "-DCMAKE_C_COMPILER=$cl" "-DCMAKE_CXX_COMPILER=$cl"
+            cmake -S $src -B "C:\b\$Name" -G Ninja -DCMAKE_BUILD_TYPE=Release -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_TARGET_TRIPLET=x64-windows-145-release -DVCPKG_HOST_TRIPLET=x64-windows-145-release -DVCPKG_INSTALLED_DIR=C:/b/installed -DVCPKG_OVERLAY_TRIPLETS=C:/reg/triplets "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DCMAKE_PREFIX_PATH=C:/b/blue-prefix;C:/b/installed/x64-windows-145-release" "-DCMAKE_C_COMPILER=$cl" "-DCMAKE_CXX_COMPILER=$cl"
             if ($LASTEXITCODE -ne 0) { throw "Configure failed for $Name" }
             cmake --build "C:\b\$Name" --target $Target
             if ($LASTEXITCODE -ne 0) { throw "Build failed for $Name" }
