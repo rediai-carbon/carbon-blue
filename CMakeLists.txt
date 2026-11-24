@@ -303,11 +303,12 @@ target_link_libraries(Blue
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # The Linux triplet ships one shared libpython. blue.so and exefile both
-    # record DT_NEEDED for that SONAME, and the dynamic linker maps it once.
-    # Stripping Python3::Python here leaves blue.so with undefined Python
-    # symbols, which this linker rejects. A second interpreter would require
-    # a second static copy, which this link does not create.
+    # The Linux triplet ships one shared libpython. Link that SONAME into
+    # blue.so. One mapped runtime also requires the host executable to record
+    # the same DT_NEEDED entry; this file does not link the host. A second
+    # interpreter would require a second static copy, which this link does
+    # not create. Stripping Python3::Python here leaves blue.so with
+    # undefined Python symbols, which this linker rejects.
     find_package(Python3 COMPONENTS Development REQUIRED)
     target_include_directories(Blue PRIVATE ${Python3_INCLUDE_DIRS})
     target_link_libraries(Blue PRIVATE Python3::Python)
