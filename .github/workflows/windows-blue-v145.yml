@@ -383,41 +383,43 @@ jobs:
           $env:BUILDFLAVOR = "release"
           $env:PYTHONHOME = Split-Path $stdlib -Parent
           $env:PYTHONPATH = "$ext;$($exe.DirectoryName);${env:GITHUB_WORKSPACE}\python;$triplet\bin;$triplet\lib;$triplet\bin\python;$stdlib"
-          Set-Content -Path C:\b\d3dinfo_run.py -Encoding ascii -Value @"
-import sys
-print("D3DINFO_PYTHON", sys.version)
-import blue
-ext = blue.LoadExtension("_d3dinfo")
-d3d = ext.D3D11Info()
-d3d.InitializeD3D()
-count = d3d.GetAdapterCount()
-print("D3D11_ADAPTER_COUNT", count)
-for index in range(count):
-    info = d3d.GetAdapterInfo(index)
-    print("D3D11_ADAPTER", index, info.description, info.vendorID, info.deviceID)
-d3d.ShutdownD3D()
-d12 = ext.D3D12Info()
-d12.InitializeD3D()
-count12 = d12.GetAdapterCount()
-print("D3D12_ADAPTER_COUNT", count12)
-for index in range(count12):
-    info = d12.GetAdapterInfo(index)
-    print("D3D12_ADAPTER", index, info.description, info.vendorID, info.deviceID)
-d12.ShutdownD3D()
-print("D3DINFO_EXECUTED")
-"@
-          Set-Content -Path C:\b\ime_run.py -Encoding ascii -Value @"
-import sys
-print("IME_PYTHON", sys.version)
-import blue
-ext = blue.LoadExtension("_ime")
-ime = ext.Ime()
-layout = ime.GetKeyboardLayout()
-print("IME_KEYBOARD_LAYOUT", layout)
-if not layout:
-    raise SystemExit("GetKeyboardLayout returned an empty layout")
-print("IME_EXECUTED")
-"@
+          $d3dScript = @(
+            "import sys"
+            "print('D3DINFO_PYTHON', sys.version)"
+            "import blue"
+            "ext = blue.LoadExtension('_d3dinfo')"
+            "d3d = ext.D3D11Info()"
+            "d3d.InitializeD3D()"
+            "count = d3d.GetAdapterCount()"
+            "print('D3D11_ADAPTER_COUNT', count)"
+            "for index in range(count):"
+            "    info = d3d.GetAdapterInfo(index)"
+            "    print('D3D11_ADAPTER', index, info.description, info.vendorID, info.deviceID)"
+            "d3d.ShutdownD3D()"
+            "d12 = ext.D3D12Info()"
+            "d12.InitializeD3D()"
+            "count12 = d12.GetAdapterCount()"
+            "print('D3D12_ADAPTER_COUNT', count12)"
+            "for index in range(count12):"
+            "    info = d12.GetAdapterInfo(index)"
+            "    print('D3D12_ADAPTER', index, info.description, info.vendorID, info.deviceID)"
+            "d12.ShutdownD3D()"
+            "print('D3DINFO_EXECUTED')"
+          ) -join "`n"
+          Set-Content -Path C:\b\d3dinfo_run.py -Encoding ascii -Value $d3dScript
+          $imeScript = @(
+            "import sys"
+            "print('IME_PYTHON', sys.version)"
+            "import blue"
+            "ext = blue.LoadExtension('_ime')"
+            "ime = ext.Ime()"
+            "layout = ime.GetKeyboardLayout()"
+            "print('IME_KEYBOARD_LAYOUT', layout)"
+            "if not layout:"
+            "    raise SystemExit('GetKeyboardLayout returned an empty layout')"
+            "print('IME_EXECUTED')"
+          ) -join "`n"
+          Set-Content -Path C:\b\ime_run.py -Encoding ascii -Value $imeScript
           function Invoke-BluePython([string]$Script, [string]$Out, [string]$Err) {
             $proc = Start-Process -FilePath $exe.FullName -ArgumentList @(
               "/nocrashreportupload", "/inherit", "/buildflavor=release", "/py", $Script
