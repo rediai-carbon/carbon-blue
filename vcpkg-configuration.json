@@ -7,8 +7,8 @@
   "registries": [
     {
       "kind": "git",
-      "baseline": "1caa00fb6a5788419db2189552b7df6debf83866",
-      "reference": "1caa00fb6a5788419db2189552b7df6debf83866",
+      "baseline": "6a0b24b261c8c47426ca13ec6e44fcaa16ea7e8a",
+      "reference": "6a0b24b261c8c47426ca13ec6e44fcaa16ea7e8a",
       "repository": "https://github.com/rediai-carbon/carbon-vcpkg-registry.git",
       "packages": [
         "python3",
